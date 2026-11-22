@@ -55,6 +55,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [filter, setFilter] = useState("All")
   const [selection, setSelection] = useState<Selection>()
   const [showOriginal, setShowOriginal] = useState(false)
+  const [publishedSamples, setPublishedSamples] = useState<Record<number, Pick<ApiItem, "name" | "description" | "question">>>({})
   const combined = liveData && combineAdminRecords(liveData)
   const data = preview ?? combined?.data
   const isSampleItem = (id: number) => combined?.itemIds.has(id) === true
@@ -101,7 +102,10 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
     setSelection(next)
   }
 
-  const items = data?.items ?? []
+  const items = (data?.items ?? []).map((item): ApiItem => {
+    const edits = isSampleItem(item.id) && publishedSamples[item.id]
+    return edits ? { ...item, ...edits, image: "", privacy: "Published" } : item
+  })
   const claims = data?.claims ?? []
   const desks = data?.desks ?? []
   const itemById = new Map(items.map((item) => [item.id, item]))
@@ -130,6 +134,26 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const selectedItem = selectedClaim ? itemById.get(selectedClaim.itemId) : selection?.type === "item" ? itemById.get(selection.id) : undefined
   const selectedMessages = data?.claimThreads.find((thread) => thread.claimId === selectedClaim?.id)?.messages ?? []
   const selectedDesks = desks.filter((desk) => combined?.liveDeskIds.has(desk.id) || desk.id === selectedItem?.custodyDeskId)
+
+  function publishRedactedReport(item: ApiItem, form: FormData) {
+    const edits = {
+      name: field(form, "name").trim(),
+      description: field(form, "description").trim(),
+      question: item.question ? field(form, "question").trim() : undefined,
+    }
+    if (!edits.name || !edits.description || (item.question && !edits.question)) {
+      setError("Enter the redacted title, description, and any required ownership question.")
+      return
+    }
+    if (isSampleItem(item.id)) {
+      setPublishedSamples((previous) => ({ ...previous, [item.id]: edits }))
+      setSelection(undefined)
+      setError("")
+      setNotice("Sample published for this walkthrough. The public feed was not changed.")
+      return
+    }
+    void run(() => adminModerate(item.id, { action: "publish", ...edits }), "Redacted report published.", true)
+  }
   const original = selectedItem && showOriginal ? selectedItem.originalContent ?? selectedItem : undefined
 
   const analytics = new Map<string, { reports: number; returned: number }>()
@@ -199,7 +223,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
       <tbody>{rows.map((item) => <tr key={item.id}>
         <td><b>{ticket(item.id)}</b></td><td className="inventory-item"><b>{item.name}</b><small>{item.category} · {item.date}{isSampleItem(item.id) && item.date !== "Sample record" && " · Sample"}</small></td>
         <td>{item.location}</td><td>{custody(item)}{item.shelfTag && item.custodyDeskId && item.status !== "Returned" && <small className="block">{item.shelfTag}</small>}</td>
-        <td><span className={"inventory-status " + item.status.toLowerCase().replace(/ /g, "-")}>{displayStatus(item.status)}</span>{item.privacy === "Held" && <small className="block">Held for privacy</small>}</td>
+        <td><span className={"inventory-status " + item.status.toLowerCase().replace(/ /g, "-")}>{displayStatus(item.status)}</span>{item.privacy === "Held" && <small className="block">Held for privacy</small>}{item.privacy === "Published" && <small className="block">{isSampleItem(item.id) ? "Sample published" : "Privacy review complete"}</small>}</td>
         <td><button className="inspect-button" onClick={() => inspect({ type: "item", id: item.id })}>Inspect</button></td>
       </tr>)}</tbody>
     </table>{!rows.length && <p className="admin-muted inventory-no-results">No items match this view.</p>}</div>
@@ -280,7 +304,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
             <header><div><span>{ticket(item.id)}</span><b>Privacy review</b></div><small>{item.date}</small></header>
             <h2>{item.name}</h2><p>{item.location} · Submitted by {item.reporter}</p>
             <div className="admin-privacy-preview"><span>Public feed preview</span><b>{item.category === "IDs and Cards" ? "Student ID / card details" : "Sensitive campus record"}</b><small>{item.description}</small></div>
-            <footer><span>Requires redaction before publishing</span><button className="admin-primary" onClick={() => inspect({ type: "item", id: item.id })}>{isSampleItem(item.id) ? "Inspect sample" : "Review & publish"}</button></footer>
+            <footer><span>Requires redaction before publishing</span><button className="admin-primary" onClick={() => inspect({ type: "item", id: item.id })}>{isSampleItem(item.id) ? "Review sample" : "Review & publish"}</button></footer>
           </article>)}
           {!held.length && <div className="admin-empty-card"><ShieldCheck size={28} /><h2>No reports require privacy review</h2><p>All public reports are currently cleared for release.</p></div>}
         </div>}
@@ -428,15 +452,14 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               <label>Shelf tag<input name="shelfTag" defaultValue={selectedItem.shelfTag} maxLength={120} /></label>
               <button className="admin-refresh" disabled={writeDisabled}>Save custody</button>
             </form>}
-            {!selectedIsSample && (selectedItem.privacy === "Held" ? <form className="admin-form" onSubmit={submit((form) => void run(() => adminModerate(selectedItem.id, {
-              action: "publish", name: field(form, "name"), description: field(form, "description"), question: field(form, "question"),
-            }), "Redacted report published."))}>
-              <h3>Privacy Review</h3><p>Remove sensitive details from the public text. Publishing removes the original photo from the feed.</p>
+            {selectedItem.privacy === "Held" ? <form className="admin-form" onSubmit={submit((form) => publishRedactedReport(selectedItem, form))}>
+              <h3>Privacy Review</h3>
+              <p>{selectedIsSample ? "Practice redacting the public text. Sample publishing stays in this walkthrough." : "Remove sensitive details from the public text. Publishing removes the original photo from the feed."}</p>
               <label>Redacted title<input name="name" defaultValue={selectedItem.name} required maxLength={120} /></label>
               <label>Redacted description<textarea name="description" defaultValue={selectedItem.description} required maxLength={1500} /></label>
               {selectedItem.question && <label>Public ownership question<input name="question" defaultValue={selectedItem.question} required maxLength={200} /></label>}
-              <button className="btn-primary" disabled={writeDisabled}>Publish redacted report</button>
-            </form> : <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminModerate(selectedItem.id, { action: "hold" }), "Report held for privacy review.")}>Hold for privacy review</button>)}
+              <button className="btn-primary" disabled={writeDisabled}>{selectedIsSample ? "Publish redacted sample" : "Publish redacted report"}</button>
+            </form> : !selectedIsSample && <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminModerate(selectedItem.id, { action: "hold" }), "Report held for privacy review.")}>Hold for privacy review</button>}
             <div className="admin-record-list">{claims.filter((claim) => claim.itemId === selectedItem.id).map((claim) => <article key={claim.id}><b>{claim.claimant} · {claim.status}</b>
               <button className="inspect-button" onClick={() => inspect({ type: "claim", id: claim.id })}>Review claim</button>
             </article>)}</div>
