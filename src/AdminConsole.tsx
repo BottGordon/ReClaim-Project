@@ -25,6 +25,7 @@ const displayStatus = (status: ApiItem["status"]) => status === "Returned" ? "Re
 const categories = ["Electronics", "Accessories", "IDs and Cards", "Books and Notes", "Clothing", "Others"]
 const field = (data: FormData, name: string) => String(data.get(name) || "")
 const messageFor = (error: unknown) => error instanceof Error ? error.message : "The request could not be completed."
+const matchKey = ({ lostId, foundId }: AdminOverview["matches"][number]) => `${lostId}:${foundId}`
 
 function AdminDialog({ title, children, onClose, hideHeader = false }: { title: string; children: ReactNode; onClose: () => void; hideHeader?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -58,6 +59,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [showOriginal, setShowOriginal] = useState(false)
   const [publishedSamples, setPublishedSamples] = useState<Record<number, Pick<ApiItem, "name" | "description" | "question">>>({})
   const [sampleCustody, setSampleCustody] = useState<Record<number, Pick<ApiItem, "custodyDeskId" | "shelfTag">>>({})
+  const [linkedSampleMatches, setLinkedSampleMatches] = useState<Set<string>>(() => new Set())
   const combined = liveData && combineAdminRecords(liveData)
   const data = preview ?? combined?.data
   const isSampleItem = (id: number) => combined?.itemIds.has(id) === true
@@ -130,7 +132,10 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const custody = (item: ApiItem) => item.status === "Returned" ? "Released to owner"
     : item.status === "Lost" ? "Not recovered" : desks.find((desk) => desk.id === item.custodyDeskId)?.name || "With finder"
   const held = items.filter((item) => item.privacy === "Held")
-  const matches = data?.matches ?? []
+  const matches = (data?.matches ?? []).map((match) => {
+    const sample = isSampleItem(match.lostId) || isSampleItem(match.foundId)
+    return { ...match, sample, linked: match.linked || (sample && linkedSampleMatches.has(matchKey(match))) }
+  })
   const pendingMatches = matches.filter((match) => !match.linked).length
   const inCustody = data?.stats.inCustody ?? items.filter((item) => item.custodyDeskId && item.status !== "Returned").length
   const activeReports = data?.stats.activeReports ?? items.filter((item) => item.status !== "Returned" && item.privacy !== "Held").length
@@ -144,6 +149,17 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const selectedItem = selectedClaim ? itemById.get(selectedClaim.itemId) : selection?.type === "item" ? itemById.get(selection.id) : undefined
   const selectedMessages = data?.claimThreads.find((thread) => thread.claimId === selectedClaim?.id)?.messages ?? []
   const selectedDesks = desks.filter((desk) => selectedIsSample || combined?.liveDeskIds.has(desk.id) || desk.id === selectedItem?.custodyDeskId)
+
+  function linkMatch(match: (typeof matches)[number]) {
+    if (match.linked) return
+    if (match.sample) {
+      setLinkedSampleMatches((previous) => new Set(previous).add(matchKey(match)))
+      setError("")
+      setNotice("Sample match linked. No real notification was sent.")
+      return
+    }
+    void run(() => adminLinkMatch(match.lostId, match.foundId), "Match linked and reporter notified.")
+  }
   const canChangeCustody = selectedItem && selectedItem.status !== "Lost" && selectedItem.status !== "Returned"
 
   function changeCustody(item: ApiItem, deskId: string | null, shelfTag: string) {
@@ -336,9 +352,11 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           {matches.filter((match) => visibleIds.has(match.lostId) || visibleIds.has(match.foundId)).map((match) => {
             const lost = itemById.get(match.lostId)
             const found = itemById.get(match.foundId)
-            return <article className="admin-match-card" key={match.lostId + ":" + match.foundId}>
-              <header><div><span>Potential match</span><p>{found?.category} · Matching item details</p></div>
-                {isSampleItem(match.lostId) || isSampleItem(match.foundId) ? <small>Sample match</small> : <button className="admin-primary" disabled={writeDisabled || match.linked} onClick={() => void run(() => adminLinkMatch(match.lostId, match.foundId), "Match linked and reporter notified.")}>{match.linked ? "Owner notified" : "Notify owner & link"}</button>}</header>
+            return <article className="admin-match-card" key={matchKey(match)}>
+              <header><div><span>Potential match</span><p>{found?.category} · {match.sample ? "Sample match" : "Matching item details"}</p></div>
+                <button className="admin-primary" disabled={writeDisabled || match.linked} onClick={() => linkMatch(match)}>
+                  {match.linked ? (match.sample ? "Sample linked" : "Owner notified") : "Notify owner & link"}
+                </button></header>
               <div className="admin-match-columns">
                 <section><div><span>Lost</span><b>{ticket(match.lostId)}</b></div><h3>{lost?.name}</h3><p>{lost?.location}</p><small>Reporter: {lost?.reporter}</small></section>
                 <section><div><span>Found</span><b>{ticket(match.foundId)}</b></div><h3>{found?.name}</h3><p>{found?.location}</p><small>Custody: {found ? custody(found) : "Unknown"}</small></section>
