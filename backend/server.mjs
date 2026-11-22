@@ -18,7 +18,8 @@ try {
 }
 const dataDir = process.env.RECLAIM_DATA_DIR || path.join(root, "data")
 const dataFile = path.join(dataDir, "reclaim.json")
-const port = Number(process.env.API_PORT || 3001)
+const port = Number(process.env.API_PORT || process.env.PORT || 3001)
+const host = process.env.API_HOST || "127.0.0.1"
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://sqicephynnalidwgbxof.supabase.co"
 const supabasePublicKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -828,8 +829,8 @@ async function handler(req, res) {
   }
 }
 
-createServer(handler).listen(port, "127.0.0.1", () => {
-  console.log(`ReClaim API listening at http://127.0.0.1:${port}`)
+createServer(handler).listen(port, host, () => {
+  console.log(`ReClaim API listening at http://${host}:${port}`)
 })
 
 
