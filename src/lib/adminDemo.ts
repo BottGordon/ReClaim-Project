@@ -6,10 +6,16 @@ const samples = [
   { id: 102, name: "PLM student ID", category: "IDs and Cards", location: "University Activity Center", custodyDeskId: "main-gate", shelfTag: "Peer handover scheduled at OSDS Desk", claimant: "J. Aringo", requested: "3h ago", description: "A student ID recovered near the entrance. Identifying details are withheld." },
 ]
 
+const sampleVerificationNotes: Record<number, string> = {
+  108: "₱640 in cash (three ₱200 bills and two ₱20 bills), a Beep card, and a 2×2 ID photo in the inner flap.",
+  105: "MacBook Air M1 in a clear case. The lock screen shows Mayon Volcano. The case has a PLM Haribon crest sticker and a small coffee cup sticker.",
+  102: "PLM student ID belonging to J. Aringo, BS Architecture. Verify the printed student number against the claimant’s details.",
+}
+
 const found: ApiItem[] = samples.map(({ id, name, category, location, custodyDeskId, shelfTag, description }) => ({
   id, name, category, location, custodyDeskId, description, status: "Pending Claim",
   date: "Sample record", image: `/items/${id === 108 ? "wallet" : id === 105 ? "laptop" : "student-id"}.jpg`,
-  shelfTag, reporter: "Campus desk", reporterRole: "PLM Staff",
+  shelfTag, privateNotes: sampleVerificationNotes[id], reporter: "Campus desk", reporterRole: "PLM Staff",
 }))
 
 const otherReports: ApiItem[] = [
