@@ -12,6 +12,12 @@ const sampleVerificationNotes: Record<number, string> = {
   102: "PLM student ID belonging to J. Aringo, BS Architecture. Verify the printed student number against the claimant’s details.",
 }
 
+const sampleClaimantProof: Record<number, string> = {
+  108: "My BPI Beep card and a 2×2 ID photo are inside the inner clear flap. I also remember three ₱200 bills and two ₱20 bills.",
+  105: "The left sticker is the PLM Haribon crest and the right sticker is a coffee cup. My MacBook’s lock screen shows Mayon Volcano.",
+  102: "The ID is on a dark green woven PLM lanyard. I can confirm my student number with the campus desk.",
+}
+
 const found: ApiItem[] = samples.map(({ id, name, category, location, custodyDeskId, shelfTag, description }) => ({
   id, name, category, location, custodyDeskId, description, status: "Pending Claim",
   date: "Sample record", image: `/items/${id === 108 ? "wallet" : id === 105 ? "laptop" : "student-id"}.jpg`,
@@ -71,7 +77,7 @@ export const adminDemo: AdminOverview = {
   ],
   claims: samples.map(({ id, claimant, requested }) => ({
     id, itemId: id, claimant, requested, accountType: "PLM Student", status: "Pending",
-    verified: true, explanation: "Sample ownership evidence for the dashboard walkthrough.",
+    verified: true, explanation: sampleClaimantProof[id],
   })),
   desks: [
     { id: "vault", name: "OSDS Main Vault", active: true },
