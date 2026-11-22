@@ -40,6 +40,7 @@ export type ApiItem = {
   rewardAmount?: string
   rewardDescription?: string
   custodyDeskId?: string
+  previousCustodyDesk?: string
   shelfTag?: string
   privacy?: "Held" | "Published"
   privateNotes?: string

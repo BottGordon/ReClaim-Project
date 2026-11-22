@@ -247,6 +247,13 @@
   .icon-button:hover { color: #4b2e1f; border-color: #a9c9c6; background: #edf5f3; }
   .top-profile { display: flex; align-items: center; gap: 5px; padding: 3px 5px 3px 3px; border-radius: 11px; color: #748482; }
   .top-profile:hover { background: #e9efed; }
+  .top-profile-menu { position: relative; }
+  .top-profile-menu summary { cursor: pointer; list-style: none; }
+  .top-profile-menu summary::-webkit-details-marker { display: none; }
+  .top-profile-menu[open] summary { background: #e9efed; }
+  .top-profile-options { position: absolute; inset-inline-end: 0; top: calc(100% + 8px); width: max-content; min-width: 172px; padding: 5px; border: 1px solid #e0e2dc; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(75 46 31 / .13); }
+  .top-profile-options button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 9px; border-radius: 7px; color: #4b2e1f; font-size: 13px; text-align: start; cursor: pointer; }
+  .top-profile-options button:hover, .top-profile-options button:focus-visible { background: #f5f0e8; }
   .notification-dot { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; border: 2px solid #fbfaf6; border-radius: 99px; color: #4b2e1f; background: #f4e6a6; font-size: 8px; font-weight: 800; }
   .content { max-width: 1440px; margin: 0 auto; padding: 34px 36px 60px; }
   .mobile-menu { display: none; margin-right: 12px; }
@@ -996,7 +1003,10 @@
 .claim-answer { padding: 10px; border-radius: 10px; background: #f6f3ee; }
 .claim-answer small { color: rgb(75 46 31 / .58); font-size: 8px; font-weight: 800; }
 .claim-answer p { margin-top: 5px; font-size: 11px; font-weight: 700; line-height: 1.5; }
-.claim-proof-panel > img { max-height: 90px; margin-top: 10px; border-radius: 8px; object-fit: cover; }
+.claim-proof-photo { margin-top: 10px; }
+.claim-proof-photo summary { color: #4b2e1f; font-size: 11px; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.claim-proof-photo img { display: block; width: 100%; max-height: 300px; margin-top: 8px; border-radius: 8px; background: #fff; object-fit: contain; }
+.claim-answer .claim-proof-missing { margin-top: 10px; color: #66574d; font-weight: 500; }
 .claim-proof-panel footer { display: flex; justify-content: space-between; margin-top: auto; padding-top: 10px; border-top: 1px solid rgb(75 46 31 / .10); font-size: 9px; }
 .claim-chat-panel { margin-top: 18px; padding: 16px; border-radius: 16px; background: #fff; box-shadow: 0 8px 24px rgb(75 46 31 / .06); }
 .claim-chat-panel > header { display: flex; justify-content: space-between; margin-bottom: 10px; }

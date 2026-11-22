@@ -1,5 +1,8 @@
 {
   "title": "ReClaim",
+  "icons": {
+    "icon": "/reclaim-icon.png?v=2"
+  },
   "description": "Help PLM students, staff, and visitors find lost belongings, report found items, verify ownership, and coordinate secure returns through messaging.",
   "robots": {
     "index": false

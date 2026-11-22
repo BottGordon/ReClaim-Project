@@ -1,4 +1,5 @@
 import { AdminConsole } from "./AdminConsole"
+import { AccountAvatar } from "./AccountAvatar"
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   ApiClaim,
@@ -1587,6 +1588,16 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<ApiItem | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [toast, setToast] = useState("")
+  const accountMenu = useRef<HTMLDetailsElement>(null)
+
+  useEffect(() => {
+    function dismissAccountMenu(event: PointerEvent) {
+      const menu = accountMenu.current
+      if (menu?.open && event.target instanceof Node && !menu.contains(event.target)) menu.open = false
+    }
+    document.addEventListener("pointerdown", dismissAccountMenu)
+    return () => document.removeEventListener("pointerdown", dismissAccountMenu)
+  }, [])
 
   function mapUser(user: ApiUser): DemoUser {
     return {
@@ -1650,6 +1661,22 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
+  function closeAccountMenu() {
+    if (accountMenu.current) accountMenu.current.open = false
+  }
+
+  async function signOut() {
+    closeAccountMenu()
+    await logout().catch(() => {})
+    setCurrentUser(null)
+    setItems([])
+    setClaims([])
+    setConversations([])
+    setNotifications([])
+    setSelectedItem(null)
+    goTo("browse")
+  }
+
   if (restoringSession) return <p role="status" className="p-6">Checking your session…</p>
 
   if (!currentUser)
@@ -1711,7 +1738,7 @@ export default function App() {
         </nav>
         <div className="sidebar-user">
           <button className="sidebar-profile" onClick={() => goTo("profile")}>
-            <span className="avatar">{currentUser.initials}</span>
+            <AccountAvatar className="avatar" user={currentUser} />
             <span className="min-w-0 text-left">
               <b>{currentUser.name}</b>
               <small>{displayAccountType(currentUser.accountType)}</small>
@@ -1719,12 +1746,7 @@ export default function App() {
           </button>
           <button
             className="logout-button"
-            onClick={async () => {
-              await logout()
-              setCurrentUser(null)
-              setItems([]); setClaims([]); setConversations([]); setNotifications([])
-              goTo("browse")
-            }}
+            onClick={signOut}
           >
             <LogOut size={16} /> Sign out
           </button>
@@ -1768,10 +1790,27 @@ export default function App() {
               <Bell size={19} />
               {unread > 0 && <span className="notification-dot">{unread}</span>}
             </button>
-            <button className="top-profile" onClick={() => goTo("profile")}>
-              <span className="avatar small">{currentUser.initials}</span>
-              <ChevronDown size={15} />
-            </button>
+            <details className="top-profile-menu" ref={accountMenu} onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) closeAccountMenu()
+            }} onKeyDown={(event) => {
+              if (event.key === "Escape" && event.currentTarget.open) {
+                event.preventDefault()
+                closeAccountMenu()
+                event.currentTarget.querySelector("summary")?.focus()
+              }
+            }}>
+              <summary className="top-profile" aria-label="Account menu">
+                <AccountAvatar className="avatar small" user={currentUser} />
+                <ChevronDown size={15} aria-hidden="true" />
+              </summary>
+              <div className="top-profile-options">
+                <button type="button" onClick={() => {
+                  closeAccountMenu()
+                  goTo("profile")
+                }}><Settings size={16} /> Profile &amp; settings</button>
+                <button type="button" onClick={signOut}><LogOut size={16} /> Sign out</button>
+              </div>
+            </details>
           </div>
         </header>
         <main className="content">
@@ -1843,11 +1882,7 @@ export default function App() {
             <Profile
               user={currentUser}
               notify={notify}
-              onLogout={async () => {
-                await logout()
-                setCurrentUser(null)
-                setItems([]); setClaims([]); setConversations([]); setNotifications([])
-              }}
+              onLogout={signOut}
               onSave={async (photo) => {
                 const user = await saveProfile({ photo })
                 setCurrentUser(mapUser(user))
