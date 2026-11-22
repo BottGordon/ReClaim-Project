@@ -1,4 +1,5 @@
 import { AdminConsole } from "./AdminConsole"
+import { AccountAvatar } from "./AccountAvatar"
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   ApiClaim,
@@ -1711,7 +1712,7 @@ export default function App() {
         </nav>
         <div className="sidebar-user">
           <button className="sidebar-profile" onClick={() => goTo("profile")}>
-            <span className="avatar">{currentUser.initials}</span>
+            <AccountAvatar className="avatar" user={currentUser} />
             <span className="min-w-0 text-left">
               <b>{currentUser.name}</b>
               <small>{displayAccountType(currentUser.accountType)}</small>
@@ -1768,8 +1769,8 @@ export default function App() {
               <Bell size={19} />
               {unread > 0 && <span className="notification-dot">{unread}</span>}
             </button>
-            <button className="top-profile" onClick={() => goTo("profile")}>
-              <span className="avatar small">{currentUser.initials}</span>
+            <button className="top-profile" aria-label="Profile & settings" onClick={() => goTo("profile")}>
+              <AccountAvatar className="avatar small" user={currentUser} />
               <ChevronDown size={15} />
             </button>
           </div>

@@ -1,6 +1,7 @@
 ﻿import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { BarChart3, Bell, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Package, PackageCheck, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, X } from "lucide-react"
 import { adminDemo, combineAdminRecords } from "./lib/adminDemo"
+import { AccountAvatar } from "./AccountAvatar"
 import {
   adminLinkMatch, adminLogWalkIn, adminMessageClaimant, adminModerate, adminOverview,
   adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, setNotificationRead,
@@ -246,7 +247,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           {id === "moderation" && <b>{held.length}</b>}
         </button>)}
       </nav>
-      <div className="admin-sidebar-user"><span className="admin-user-avatar">{user.initials}</span><b>{user.name}</b><small>PLM Intramuros Campus</small>
+      <div className="admin-sidebar-user"><AccountAvatar className="admin-user-avatar" user={user} /><b>{user.name}</b><small>PLM Intramuros Campus</small>
         {onSignOut && <button onClick={() => { void onSignOut().catch((failure) => setError(messageFor(failure))) }}><LogOut size={14} /> Sign out</button>}
       </div>
     </aside>
