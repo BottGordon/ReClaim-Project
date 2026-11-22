@@ -1,16 +1,58 @@
 import type { AdminOverview, ApiItem } from "./api"
 
 const samples = [
-  { id: 108, name: "Black leather wallet", category: "Accessories", location: "University Library, 2nd Floor", custodyDeskId: "vault", claimant: "M. Lomboy", requested: "18m ago", description: "A black wallet found near the library reading area." },
-  { id: 105, name: "Silver laptop with clear case", category: "Electronics", location: "Gusaling Villegas, Room 302", custodyDeskId: "vault", claimant: "C. Marquez", requested: "1h ago", description: "A silver laptop in a clear case, turned in after class." },
-  { id: 102, name: "PLM student ID", category: "IDs and Cards", location: "University Activity Center", custodyDeskId: "main-gate", claimant: "J. Aringo", requested: "3h ago", description: "A student ID recovered near the entrance. Identifying details are withheld." },
+  { id: 108, name: "Black leather wallet", category: "Accessories", location: "University Library, 2nd Floor", custodyDeskId: "vault", shelfTag: "OSDS Main Vault — Shelf B2", claimant: "M. Lomboy", requested: "18m ago", description: "A black wallet found near the library reading area." },
+  { id: 105, name: "Silver laptop with clear case", category: "Electronics", location: "Gusaling Villegas, Room 302", custodyDeskId: "vault", shelfTag: "OSDS High-Value Locker — Bay 01", claimant: "C. Marquez", requested: "1h ago", description: "A silver laptop in a clear case, turned in after class." },
+  { id: 102, name: "PLM student ID", category: "IDs and Cards", location: "University Activity Center", custodyDeskId: "main-gate", shelfTag: "Peer handover scheduled at OSDS Desk", claimant: "J. Aringo", requested: "3h ago", description: "A student ID recovered near the entrance. Identifying details are withheld." },
 ]
 
-const found: ApiItem[] = samples.map(({ id, name, category, location, custodyDeskId, description }) => ({
+const found: ApiItem[] = samples.map(({ id, name, category, location, custodyDeskId, shelfTag, description }) => ({
   id, name, category, location, custodyDeskId, description, status: "Pending Claim",
   date: "Sample record", image: `/items/${id === 108 ? "wallet" : id === 105 ? "laptop" : "student-id"}.jpg`,
-  shelfTag: `Intake shelf · RCL-${id}`, reporter: "Campus desk", reporterRole: "PLM Staff",
+  shelfTag, reporter: "Campus desk", reporterRole: "PLM Staff",
 }))
+
+const otherReports: ApiItem[] = [
+  {
+    id: 109, name: "Matte Black Insulated Flask 32oz", category: "Accessories", status: "Found",
+    location: "Gusaling Katipunan, 2nd Floor", custodyDeskId: "gk-lobby", shelfTag: "GK Lobby Guard Desk — Rack 03",
+    date: "Sample record", description: "A matte black insulated flask recovered from the second-floor corridor.",
+    image: "/items/flask.jpg", reporter: "GK Lobby Guard Desk", reporterRole: "PLM Staff",
+  },
+  {
+    id: 107, name: "Casio Scientific Calculator (fx-991EX)", category: "Electronics", status: "Found",
+    location: "Gusaling Villegas, Room 204", custodyDeskId: "vault", shelfTag: "OSDS Main Vault — Shelf A-09",
+    date: "Sample record", description: "A black scientific calculator turned in after class.",
+    image: "/items/calculator.jpg", reporter: "Campus desk", reporterRole: "PLM Staff",
+  },
+  {
+    id: 99, name: "Black AquaFlask 32oz w/ Sticker", category: "Accessories", status: "Lost",
+    location: "Gusaling Katipunan, 2nd Floor", date: "Sample record", description: "A black insulated flask with a sticker was left after class.",
+    image: "/items/flask.jpg", reporter: "A. Mendoza", reporterRole: "PLM Student",
+  },
+  {
+    id: 94, name: "Casio ClassWiz fx-991EX Calculator", category: "Electronics", status: "Lost",
+    location: "Gusaling Villegas, Room 204", date: "Sample record", description: "A scientific calculator was left in Room 204.",
+    image: "/items/calculator.jpg", reporter: "R. Santos", reporterRole: "PLM Student",
+  },
+  {
+    id: 88, name: "Blue Canvas Pencil Case & Gel Pens", category: "Books and Notes", status: "Returned",
+    location: "University Library, 1st Floor", date: "Sample record", description: "A canvas pencil pouch with gel pens was returned to its owner.",
+    image: "/items/pencil-case.jpg", reporter: "Campus desk", reporterRole: "PLM Staff",
+  },
+  {
+    id: 111, name: "BPI Debit Card & PLM Student ID", category: "IDs and Cards", status: "Found", privacy: "Held",
+    location: "Gusaling Lacson, Ground Floor", custodyDeskId: "gl-entrance", shelfTag: "GL Entrance Guard Post",
+    date: "Sample record", description: "A debit card and student ID are held for review. Card digits and identifying details require redaction.",
+    image: "/items/card.jpg", reporter: "A. Torres", reporterRole: "PLM Student",
+  },
+  {
+    id: 112, name: "Printed Student Enrollment Record (SER)", category: "Books and Notes", status: "Found", privacy: "Held",
+    location: "University Library, 2nd Floor", custodyDeskId: "library-security", shelfTag: "Library Security Post",
+    date: "Sample record", description: "A printed enrollment record is held for privacy review before public release.",
+    image: "/items/document.jpg", reporter: "P. Reyes", reporterRole: "PLM Student",
+  },
+]
 
 export const adminDemo: AdminOverview = {
   items: [
@@ -19,11 +61,7 @@ export const adminDemo: AdminOverview = {
       id: id + 100, name, category, location, description, date, image: "",
       reporter: "Sample reporter", reporterRole: "PLM Student", status: "Lost" as const,
     })),
-    ...["Campus access card", "Enrollment document"].map((name, index): ApiItem => ({
-      id: 111 + index, name, category: "IDs and Cards", location: "Campus desk",
-      status: "Found", privacy: "Held", date: "Sample record", image: "",
-      description: "Sample document awaiting privacy review.", reporter: "Campus desk", reporterRole: "PLM Staff",
-    })),
+    ...otherReports,
   ],
   claims: samples.map(({ id, claimant, requested }) => ({
     id, itemId: id, claimant, requested, accountType: "PLM Student", status: "Pending",
@@ -31,10 +69,18 @@ export const adminDemo: AdminOverview = {
   })),
   desks: [
     { id: "vault", name: "OSDS Main Vault", active: true },
+    { id: "library-security", name: "Library Security Post", active: true },
     { id: "main-gate", name: "Main Gate Guardhouse", active: true },
-    { id: "library-security", name: "Library Security Desk", active: true },
+    { id: "gk-lobby", name: "GK Lobby Guard Desk", active: true },
+    { id: "gl-entrance", name: "GL Entrance Guard Post", active: true },
+    { id: "uac", name: "University Activity Center", active: true },
   ],
-  matches: found.map(({ id }) => ({ foundId: id, lostId: id + 100, linked: false })),
+  matches: [
+    { lostId: 99, foundId: 109, linked: false },
+    { lostId: 94, foundId: 105, linked: false },
+    { lostId: 94, foundId: 107, linked: false },
+    { lostId: 99, foundId: 108, linked: true },
+  ],
   users: [],
   notifications: [],
   claimThreads: samples.map(({ id, name }) => ({
@@ -45,7 +91,7 @@ export const adminDemo: AdminOverview = {
     ],
   })),
   stats: {
-    items: 8, pendingClaims: 3, inCustody: 14, activeReports: 38, returnedItems: 142, returnRate: 92,
+    items: found.length * 2 + otherReports.length, pendingClaims: 3, inCustody: 14, activeReports: 38, returnedItems: 142, returnRate: 92,
     analytics: [
       { location: "University Library", reports: 48, returned: 45 },
       { location: "Gusaling Villegas (GV)", reports: 39, returned: 35 },
@@ -60,11 +106,19 @@ export function combineAdminRecords(live: AdminOverview) {
   const liveItemIds = new Set(live.items.map((item) => item.id))
   const liveClaimIds = new Set(live.claims.map((claim) => claim.id))
   const liveDeskIds = new Set(live.desks.map((desk) => desk.id))
-  const items = adminDemo.items.filter((item) => !liveItemIds.has(item.id))
+  const liveDeskByName = new Map(live.desks.map((desk) => [desk.name.trim().toLowerCase(), desk.id]))
+  const sampleDeskIds = new Map(adminDemo.desks.map((desk) => [
+    desk.id, liveDeskByName.get(desk.name.trim().toLowerCase()) ?? desk.id,
+  ]))
+  const items = adminDemo.items.filter((item) => !liveItemIds.has(item.id)).map((item) => ({
+    ...item, custodyDeskId: item.custodyDeskId && sampleDeskIds.get(item.custodyDeskId),
+  }))
   const itemIds = new Set(items.map((item) => item.id))
   const claims = adminDemo.claims.filter((claim) => itemIds.has(claim.itemId) && !liveClaimIds.has(claim.id))
-  const desks = adminDemo.desks.filter((desk) => !liveDeskIds.has(desk.id))
-  const matches = adminDemo.matches.filter(({ lostId, foundId }) => itemIds.has(lostId) && itemIds.has(foundId))
+  const desks = adminDemo.desks.filter((desk) => !liveDeskIds.has(desk.id) && !liveDeskByName.has(desk.name.trim().toLowerCase()))
+  const liveMatchKeys = new Set(live.matches.map(({ lostId, foundId }) => `${lostId}:${foundId}`))
+  const matches = adminDemo.matches.filter(({ lostId, foundId }) =>
+    itemIds.has(lostId) && itemIds.has(foundId) && !liveMatchKeys.has(`${lostId}:${foundId}`))
   const data: AdminOverview = {
     ...live,
     items: [...items, ...live.items],
