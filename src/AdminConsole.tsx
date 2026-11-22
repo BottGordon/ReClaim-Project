@@ -137,6 +137,9 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const notifications = data?.notifications ?? []
   const unread = notifications.filter((notification) => notification.unread).length
   const selectedClaim = selection?.type === "claim" ? claims.find((claim) => claim.id === selection.id) : undefined
+  const proofPhoto = selectedClaim?.proof
+  const hasProofPhoto = proofPhoto?.startsWith("data:image/") ||
+    (selectedIsSample && proofPhoto?.startsWith("/items/"))
   const claimant = selectedClaim?.claimantId ? userById.get(selectedClaim.claimantId) : undefined
   const selectedItem = selectedClaim ? itemById.get(selectedClaim.itemId) : selection?.type === "item" ? itemById.get(selection.id) : undefined
   const selectedMessages = data?.claimThreads.find((thread) => thread.claimId === selectedClaim?.id)?.messages ?? []
@@ -430,9 +433,9 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                   <div className="claimant-card"><div>{selectedClaim.claimant.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div><span><b>{selectedClaim.claimant}{claimant?.studentNumber ? ` (${claimant.studentNumber})` : ""}</b><small>{["PLM", "PLM Student"].includes(selectedClaim.accountType) ? "PLM Resident" : selectedClaim.accountType}</small></span></div>
                   <div className="claim-answer">
                     <small>Ownership verification</small><p>"{selectedClaim.explanation}"</p>
-                    {selectedClaim.proof?.startsWith("data:image/") ? <details className="claim-proof-photo" key={selectedClaim.id}>
+                    {hasProofPhoto ? <details className="claim-proof-photo" key={selectedClaim.id}>
                       <summary>Click to see Photo of Proof</summary>
-                      <img src={selectedClaim.proof} alt="Ownership evidence submitted by the claimant" loading="lazy" />
+                      <img src={proofPhoto} alt={selectedIsSample ? "Sample ownership evidence" : "Ownership evidence submitted by the claimant"} loading="lazy" />
                     </details> : <p className="claim-proof-missing">No photo attached</p>}
                   </div>
                 </section>

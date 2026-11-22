@@ -78,6 +78,7 @@ export const adminDemo: AdminOverview = {
   claims: samples.map(({ id, claimant, requested }) => ({
     id, itemId: id, claimant, requested, accountType: "PLM Student", status: "Pending",
     verified: true, explanation: sampleClaimantProof[id],
+    ...(id === 108 && { proof: "/items/wallet.jpg" }),
   })),
   desks: [
     { id: "vault", name: "OSDS Main Vault", active: true },
