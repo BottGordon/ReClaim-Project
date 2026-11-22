@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import custodyDesks from "../shared/custodyDesks.json" with { type: "json" }
 
 const scrypt = promisify(scryptCallback)
 const root = path.dirname(fileURLToPath(import.meta.url))
@@ -33,10 +34,7 @@ let graphToken
 let graphTokenExpires = 0
 const emptyDb = {
   users: [], items: [], claims: [], conversations: [], notifications: [], matches: [],
-  desks: [
-    { id: "osds", name: "OSDS Main Desk", active: true },
-    { id: "gate", name: "Intramuros Gate Guard Desk", active: true },
-  ],
+  desks: custodyDesks,
 }
 const seedItems = [
   { id: 1, name: "Black leather wallet", category: "Accessories", status: "Found", date: "May 18, 2025", createdAt: "2025-05-18T09:00:00.000Z", location: "University Library, 2nd floor", description: "A slim black leather wallet was found beside the north reading area. Contents are secured and will be used only for ownership verification.", image: "https://images.unsplash.com/photo-1579014134953-1580d7f123f3?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080", reporter: "Mika Reyes", reporterRole: "PLM Student", ownerId: "seed-mika", question: "What small symbol is embossed inside the wallet?", answer: "star" },
@@ -73,6 +71,30 @@ if (!Array.isArray(db.items) || db.items.length === 0) {
   db.items = structuredClone(seedItems)
   await persist()
 }
+
+const previousDesks = new Map((db.desks ?? []).map((desk) => [desk.id, desk]))
+const deskAliases = new Map([["vault", "osds"], ["library-security", "library"], ["main-gate", "gate"]])
+const currentDeskIds = new Set(custodyDesks.map((desk) => desk.id))
+const updatedDesks = custodyDesks.map((desk) => {
+  const existing = previousDesks.get(desk.id) ??
+    [...previousDesks.values()].find((entry) => deskAliases.get(entry.id) === desk.id)
+  return { ...desk, active: existing?.active ?? desk.active }
+})
+let custodyChanged = JSON.stringify(db.desks) !== JSON.stringify(updatedDesks)
+db.desks = updatedDesks
+for (const item of db.items) {
+  const deskId = item.custodyDeskId
+  if (!deskId || currentDeskIds.has(deskId)) continue
+  const replacement = deskAliases.get(deskId)
+  if (replacement) {
+    item.custodyDeskId = replacement
+  } else {
+    item.previousCustodyDesk = previousDesks.get(deskId)?.name || item.previousCustodyDesk || "Former custody desk"
+    delete item.custodyDeskId
+  }
+  custodyChanged = true
+}
+if (custodyChanged) await persist()
 
 const send = (res, status, body) => {
   res.writeHead(status, {
@@ -329,7 +351,7 @@ async function handleAdmin(req, res, route, method, user) {
         items: db.items.length,
         pendingClaims: db.claims.filter((claim) => claim.status === "Pending").length,
         returnedItems: db.presentationSeed ? 142 : db.items.filter((item) => item.status === "Returned").length,
-        inCustody: db.presentationSeed ? 14 : db.items.filter((item) => item.custodyDeskId && item.status !== "Returned").length,
+        inCustody: db.presentationSeed ? 14 : db.items.filter((item) => (item.custodyDeskId || item.previousCustodyDesk) && item.status !== "Returned").length,
         activeReports: db.presentationSeed ? 38 : db.items.filter((item) => item.status !== "Returned" && item.privacy !== "Held").length,
         returnRate: db.presentationSeed ? 92 : 0,
         analytics: db.presentationSeed ? [
@@ -400,6 +422,7 @@ async function handleAdmin(req, res, route, method, user) {
       if (input.deskId !== null && !desk) fail(400, "Select an active desk or With Finder.")
       item.custodyDeskId = desk?.id
       item.shelfTag = desk ? clean(input.shelfTag, 120) : undefined
+      delete item.previousCustodyDesk
     } else if (input.action === "hold") {
       item.privacy = "Held"
     } else if (input.action === "publish") {
@@ -429,7 +452,7 @@ async function handleAdmin(req, res, route, method, user) {
     return send(res, 200, { ok: true })
   }
 
-  const deskRoute = route.match(/^\/api\/admin\/desks\/([a-z]+)$/)
+  const deskRoute = route.match(/^\/api\/admin\/desks\/([a-z-]+)$/)
   if (method === "PATCH" && deskRoute) {
     const input = await body(req)
     const desk = db.desks.find((entry) => entry.id === deskRoute[1])
@@ -447,7 +470,7 @@ async function handler(req, res) {
   const route = url.pathname.replace(/\/+$/, "") || "/"
   const method = req.method || "GET"
   try {
-    if (method === "GET" && route === "/api/health") return send(res, 200, { ok: true, service: "reclaim-api" })
+    if (method === "GET" && route === "/api/health") return send(res, 200, { ok: true, service: "reclaim-api", custodyDeskCount: db.desks.length })
 
     if (method === "POST" && route === "/api/auth/register") {
       const input = await body(req)

@@ -130,7 +130,9 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   ].join(" ").toLowerCase().includes(needle))
   const visibleIds = new Set(visibleItems.map((item) => item.id))
   const custody = (item: ApiItem) => item.status === "Returned" ? "Released to owner"
-    : item.status === "Lost" ? "Not recovered" : desks.find((desk) => desk.id === item.custodyDeskId)?.name || "With finder"
+    : item.status === "Lost" ? "Not recovered"
+    : desks.find((desk) => desk.id === item.custodyDeskId)?.name ||
+      item.previousCustodyDesk || liveData?.desks.find((desk) => desk.id === item.custodyDeskId)?.name || "With finder"
   const held = items.filter((item) => item.privacy === "Held")
   const matches = (data?.matches ?? []).map((match) => {
     const sample = isSampleItem(match.lostId) || isSampleItem(match.foundId)
@@ -262,7 +264,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
       <thead><tr><th>Ticket</th><th>Item &amp; category</th><th>Campus location</th><th>Custody</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>{rows.map((item) => <tr key={item.id}>
         <td><b>{ticket(item.id)}</b></td><td className="inventory-item"><b>{item.name}</b><small>{item.category} · {item.date}{isSampleItem(item.id) && item.date !== "Sample record" && " · Sample"}</small></td>
-        <td>{item.location}</td><td>{custody(item)}{item.shelfTag && item.custodyDeskId && item.status !== "Returned" && <small className="block">{item.shelfTag}</small>}</td>
+        <td>{item.location}</td><td>{custody(item)}{item.shelfTag && (item.custodyDeskId || item.previousCustodyDesk) && item.status !== "Returned" && <small className="block">{item.shelfTag}</small>}</td>
         <td><span className={"inventory-status " + item.status.toLowerCase().replace(/ /g, "-")}>{displayStatus(item.status)}</span>{item.privacy === "Held" && <small className="block">Held for privacy</small>}{item.privacy === "Published" && <small className="block">{isSampleItem(item.id) ? "Sample published" : "Privacy review complete"}</small>}</td>
         <td><button className="inspect-button" onClick={() => inspect({ type: "item", id: item.id })}>Inspect</button></td>
       </tr>)}</tbody>
@@ -327,7 +329,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
             <h1>{views.find(([id]) => id === view)?.[1]}</h1>
             {view === "claims" && <p>Verify student ownership proof against confidential OSDS vault records.</p>}
             {view === "inventory" && <p>All lost, found, pending claim, and reunited items across PLM Intramuros.</p>}
-            {view === "custody" && <p>Track physical items held at OSDS Vault, Library Security, and Intramuros Gate Desks.</p>}
+            {view === "custody" && <p>Track physical items held at campus custody desks and coordinate handovers.</p>}
             {view === "moderation" && <p>Mask sensitive student ID numbers, bank cards, and enrollment records before public release.</p>}
             {view === "matches" && <p>Pair student lost reports with newly logged found items for manual verification.</p>}
             {view === "analytics" && <p>Semester report on recovery rates, turnaround times, and campus hotspots.</p>}
@@ -338,7 +340,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         </div>}
         {view === "claims" && <div className="admin-view-card">{filterButtons(["All", "Pending", "Approved", "Rejected", "Returned to another claimant"])}{claimTable(false)}</div>}
         {view === "inventory" && <div className="admin-view-card">{filterButtons(["All", "Lost", "Found", "Pending Claim", "Claimed", "Returned"])}{inventoryTable(visibleItems.filter((item) => filter === "All" || item.status === filter))}</div>}
-        {view === "custody" && <div className="admin-view-card">{inventoryTable(visibleItems.filter((item) => item.custodyDeskId || ["Claimed", "Returned"].includes(item.status)))}</div>}
+        {view === "custody" && <div className="admin-view-card">{inventoryTable(visibleItems.filter((item) => item.custodyDeskId || item.previousCustodyDesk || ["Claimed", "Returned"].includes(item.status)))}</div>}
         {view === "moderation" && <div className="admin-moderation-grid">
           {held.filter((item) => !needle || [ticket(item.id), item.name, item.location, item.category].join(" ").toLowerCase().includes(needle)).map((item) => <article className="admin-moderation-card" key={item.id}>
             <header><div><span>{ticket(item.id)}</span><b>Privacy review</b></div><small>{item.date}</small></header>
@@ -378,7 +380,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         {view === "settings" && <div className="admin-settings">
           <section className="admin-card admin-record-list"><h2>Custody Desks</h2>
             {desks.map((desk) => <article key={desk.id}><b>{desk.name}</b>
-              {combined?.liveDeskIds.has(desk.id) ? <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminSetDesk(desk.id, !desk.active), desk.active ? "Desk paused." : "Desk activated.")}>{desk.active ? "Pause desk" : "Activate desk"}</button> : <small>Sample desk</small>}
+              <button className="admin-refresh" disabled={writeDisabled || !combined?.liveDeskIds.has(desk.id)} onClick={() => void run(() => adminSetDesk(desk.id, !desk.active), desk.active ? "Desk paused." : "Desk activated.")}>{desk.active ? "Pause desk" : "Activate desk"}</button>
             </article>)}
           </section>
           <section className="admin-card admin-record-list"><h2>OSDS &amp; Security Admin Roles</h2>
