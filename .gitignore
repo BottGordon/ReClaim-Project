@@ -3,13 +3,13 @@ dist/
 build/
 .cache/
 .env*
-!.env.example
 .vite/
 vite.config.*.timestamp-*
 *.tsbuildinfo
 *-debug.log*
 logs/
 *.log
+backend/data/*.json
 .claude-replay.*
 .tmp-*
 /.figma/design-context/
@@ -20,3 +20,6 @@ logs/
 # beside it.
 /.plugins/
 /.opencode-skills/
+node_modules/
+
+!.env.example

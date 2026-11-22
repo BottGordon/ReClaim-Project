@@ -1,4 +1,34 @@
-import { FormEvent, useMemo, useRef, useState } from "react"
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
+import {
+  ApiClaim,
+  ApiConversation,
+  ApiItem,
+  ApiNotification,
+  ApiUser,
+  bootstrap,
+  changePassword,
+  clearSession,
+  createClaim,
+  createItem,
+  login,
+  logout,
+  markConversationRead,
+  markReturned,
+  register,
+  resendVerification,
+  requestPasswordReset,
+  resetPassword,
+  saveProfile,
+  sendMessage,
+  startConversation,
+  setNotificationRead,
+  undoReturned,
+  startRegistration,
+  updateClaim,
+  verifyRegistrationEmail,
+  verifyPasswordReset,
+  verifyAnswer,
+} from "./lib/api"
 import {
   Bell,
   BookOpen,
@@ -24,7 +54,6 @@ import {
   MapPin,
   Menu,
   MessageCircle,
-  MoreHorizontal,
   PackageCheck,
   Pencil,
   Plus,
@@ -43,7 +72,7 @@ import {
 
 type Page = "browse" | "report" | "activity" | "chat" | "notifications" | "profile"
 type ItemStatus = "Lost" | "Found" | "Pending Claim" | "Claimed" | "Returned"
-type ClaimStatus = "Pending" | "Approved" | "Rejected"
+type ClaimStatus = "Pending" | "Approved" | "Rejected" | "Returned to another claimant"
 type RewardType = "none" | "money" | "other"
 type AuthView = "home" | "about" | "login" | "signup" | "forgot" | "verify"
 
@@ -60,6 +89,7 @@ type DemoUser = {
   college?: string
   school?: string
   phone?: string
+  photo?: string
   role: string
 }
 
@@ -101,6 +131,7 @@ type Message = {
   mine: boolean
   text: string
   time: string
+  read?: boolean
 }
 
 type Conversation = {
@@ -497,7 +528,7 @@ const initialNotifications = [
     id: 2,
     type: "message",
     title: "New message from Joaquin",
-    text: "“I can share the serial number or meet at the library desk…”",
+    text: "I can share the serial number or meet at the library desk.",
     time: "18 minutes ago",
     unread: true,
     target: "chat" as Page,
@@ -793,34 +824,100 @@ function AboutPage({ onNavigate }: { onNavigate: (view: AuthView) => void }) {
   )
 }
 
-function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
+function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   const [view, setView] = useState<AuthView>("home")
   const [showPassword, setShowPassword] = useState(false)
-  const [accountKind, setAccountKind] = useState<"plm" | "external" | null>(
-    null,
-  )
+  const [accountKind, setAccountKind] = useState<"plm" | "external" | null>(null)
   const [role, setRole] = useState<"student" | "staff">("student")
   const [step, setStep] = useState(1)
   const [error, setError] = useState("")
+  const [verificationEmail, setVerificationEmail] = useState("")
+  const [verificationCode, setVerificationCode] = useState("")
+  const [demoCode, setDemoCode] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [successMessage, setSuccessMessage] = useState("")
 
-  function submitLogin(event: FormEvent<HTMLFormElement>) {
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const email = String(form.get("email") || "")
     const password = String(form.get("password") || "")
-    if (!email.trim() || !password) {
-      setError("Enter any text in both fields to continue testing.")
+    const remember = form.get("remember") === "on"
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError("Enter the email address you used to register.")
       return
     }
-    const normalizedIdentity = email.trim().toLowerCase()
-    onLogin({
-      ...demoUsers[3],
-      id: `prototype:${normalizedIdentity}`,
-      email: email.trim(),
-      name: email.includes("@") ? email.split("@")[0] : email.trim(),
-      initials: email.trim().slice(0, 2).toUpperCase(),
-    })
+    setBusy(true)
+    setError("")
+    try { onLogin(await login(email, password, remember)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Sign in failed.") }
+    finally { setBusy(false) }
   }
+
+  async function submitSignupEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const email = verificationEmail.trim().toLowerCase()
+    if (!/^[^\s@]+@plm\.edu\.ph$/.test(email)) {
+      setError("Use your official @plm.edu.ph email address.")
+      return
+    }
+    setBusy(true)
+    setError("")
+    try {
+      const result = await startRegistration(email)
+      setVerificationEmail(email)
+      setDemoCode(result.demoCode || "")
+      setVerificationCode("")
+      setView("verify")
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send the verification code.") }
+    finally { setBusy(false) }
+  }
+
+  async function submitRegistration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const values = Object.fromEntries([...form.entries()].map(([key, value]) => [key, String(value)]))
+    if (values.password !== values.confirm) { setError("Passwords do not match."); return }
+    if (!values.privacy) { setError("Agree to the privacy policy to continue."); return }
+    setBusy(true)
+    setError("")
+    try {
+      const result = await register({
+        ...values,
+        accountType: "plm",
+        role,
+        idNumber: values.id || "",
+        phone: values.contact || "",
+      })
+      setVerificationEmail(values.email.trim().toLowerCase())
+      setDemoCode("")
+      setVerificationEmail(values.email.trim().toLowerCase())
+      setError("")
+      setView("login")
+      window.alert("Your PLM account is ready. Sign in with your PLM email and password.")
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Account creation failed.") }
+    finally { setBusy(false) }
+  }
+
+  async function submitVerification() {
+    setBusy(true)
+    setError("")
+    try {
+      await verifyRegistrationEmail(verificationEmail, verificationCode)
+      setStep(2)
+      setView("signup")
+      setError("")
+    }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Verification failed.") }
+    finally { setBusy(false) }
+  }
+
+  if (view === "signup") return <SignupFlow onDone={(email) => {
+    if (!email) { setSuccessMessage(""); setView("login"); return }
+    setVerificationEmail(email)
+    setSuccessMessage("Your account is ready. Sign in with your registered email and password.")
+    setView("login")
+  }} />
 
   if (view === "home") {
     return <LandingPage onNavigate={setView} />
@@ -851,29 +948,48 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
               Verify your email
             </h1>
             <p className="mt-3 text-sm leading-6 text-muted">
-              We sent a 6-digit code to your email. This frontend demonstration
-              accepts any six digits.
+              Enter the 6-digit code for {verificationEmail}. In local demo mode,
+              the generated code is shown below.
             </p>
+            {demoCode && <p className="form-error mt-4">Local demo code: {demoCode}</p>}
             <div className="mt-7 flex justify-center gap-2">
               {[0, 1, 2, 3, 4, 5].map((number) => (
                 <input
                   key={number}
                   maxLength={1}
                   className="code-input"
-                  defaultValue={number === 0 ? "4" : ""}
+                  value={verificationCode[number] || ""}
+                  onChange={(event) => {
+                    const digit = event.target.value.replace(/\D/g, "").slice(-1)
+                    setVerificationCode((current) => {
+                      const next = current.padEnd(6, " ").split("")
+                      next[number] = digit || " "
+                      return next.join("").trimEnd()
+                    })
+                  }}
                   aria-label={`Digit ${number + 1}`}
                 />
               ))}
             </div>
+            {error && <div className="form-error mt-4">{error}</div>}
             <button
               className="btn-primary mt-7 w-full"
-              onClick={() => onLogin(demoUsers[0])}
+              disabled={busy || verificationCode.length !== 6}
+              onClick={submitVerification}
             >
               Verify and continue <ChevronRight size={17} />
             </button>
             <button
               className="text-button mt-4"
-              onClick={() => setView("signup")}
+              disabled={busy}
+              onClick={async () => {
+                setError("")
+                try {
+                  const result = await resendVerification(verificationEmail)
+                  setDemoCode(result.demoCode || "")
+                  setVerificationCode(result.demoCode || "")
+                } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") }
+              }}
             >
               Resend verification code
             </button>
@@ -898,13 +1014,20 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
               <p className="eyebrow text-center">Good to see you again</p>
               <h1 className="auth-title text-center">Welcome Back!</h1>
               <p className="auth-copy">
-                Log in to your ReClaim account to continue finding what matters.
+                Sign in with your PLM or External User account.
               </p>
+              {successMessage && (
+                <div className="form-error mt-4 !border-emerald-200 !bg-emerald-50 !text-emerald-800">
+                  <CheckCircle2 size={16} />
+                  {successMessage}
+                </div>
+              )}
               <form className="mt-8 space-y-5" onSubmit={submitLogin}>
                 <Field
-                  label="Email address or username"
+                  label="Email address"
                   name="email"
-                  placeholder="Email Address"
+                  type="email"
+                  placeholder="you@example.com"
                   icon={<UserRound size={17} />}
                 />
                 <div>
@@ -937,7 +1060,7 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
                 )}
                 <div className="flex items-center justify-between text-sm">
                   <label className="flex items-center gap-2 text-[#546866]">
-                    <input type="checkbox" className="accent-[#4B2E1F]" />{" "}
+                    <input name="remember" type="checkbox" className="accent-[#4B2E1F]" />{" "}
                     Remember me
                   </label>
                   <button
@@ -949,7 +1072,7 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
                   </button>
                 </div>
                 <button className="btn-primary w-full" type="submit">
-                  Sign in <ChevronRight size={17} />
+                  {busy ? "Signing in…" : "Sign in"} <ChevronRight size={17} />
                 </button>
               </form>
               <p className="mt-7 text-center text-sm text-muted">
@@ -1010,13 +1133,7 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
                   </p>
                 </>
               ) : (
-                <form
-                  className="mt-7"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    setView("verify")
-                  }}
-                >
+                <form className="mt-7" onSubmit={submitRegistration}>
                   <button
                     type="button"
                     className="text-button mb-5 flex items-center gap-1"
@@ -1140,12 +1257,15 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
                       required
                       type="checkbox"
                       className="mt-1 accent-[#4B2E1F]"
+                      name="privacy"
+                      value="yes"
                     />
                     I agree to ReClaim’s privacy and responsible use policy.
-                    This demo does not create a production account.
+                    Your account will be created after email verification.
                   </label>
+                  {error && <div className="form-error mt-4">{error}</div>}
                   <button className="btn-primary mt-6 w-full" type="submit">
-                    Create account <ChevronRight size={17} />
+                    {busy ? "Creating account…" : "Create account"} <ChevronRight size={17} />
                   </button>
                   <p className="mt-6 text-center text-sm text-muted">
                     Already have an account?{" "}
@@ -1167,6 +1287,68 @@ function Auth({ onLogin }: { onLogin: (user: DemoUser) => void }) {
   )
 }
 
+function SignupFlow({ onDone }: { onDone: (email: string) => void }) {
+  const [stage, setStage] = useState<"choose" | "email" | "otp" | "details">("choose")
+  const [accountKind, setAccountKind] = useState<"plm" | "external">("plm")
+  const [email, setEmail] = useState("")
+  const [code, setCode] = useState("")
+  const [role, setRole] = useState<"student" | "staff">("student")
+  const [showPassword, setShowPassword] = useState(false)
+  const [demoCode, setDemoCode] = useState("")
+  const [error, setError] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [details, setDetails] = useState({ name: "", studentNumber: "", phone: "", school: "", password: "", confirm: "" })
+  const passwordRule = /^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/
+  const external = accountKind === "external"
+
+  async function sendCode(event: FormEvent) {
+    event.preventDefault()
+    const normalized = email.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) { setError("Enter a valid email address."); return }
+    if (!external && !/^[^\s@]+@plm\.edu\.ph$/.test(normalized)) { setError("Use your official @plm.edu.ph email."); return }
+    setBusy(true); setError("")
+    try {
+      const result = await startRegistration(normalized, external ? "External User" : "PLM")
+      setEmail(normalized); setDemoCode(result.demoCode || ""); setCode(""); setStage("otp")
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send the code.") }
+    finally { setBusy(false) }
+  }
+
+  async function checkCode(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError("")
+    try { await verifyRegistrationEmail(email, code); setStage("details") }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Code verification failed.") }
+    finally { setBusy(false) }
+  }
+
+  async function createAccount(event: FormEvent) {
+    event.preventDefault(); setError("")
+    if (!passwordRule.test(details.password)) { setError("Password needs 8+ characters, an uppercase letter, a number, and a special character."); return }
+    if (details.password !== details.confirm) { setError("Passwords do not match."); return }
+    setBusy(true)
+    try {
+      await register({ ...details, email, accountType: external ? "External User" : "PLM", role, idNumber: details.studentNumber, phone: details.phone })
+      onDone(email)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create your account.") }
+    finally { setBusy(false) }
+  }
+
+  function goBack() {
+    setError("")
+    if (stage === "choose") onDone("")
+    else if (stage === "email") setStage("choose")
+    else if (stage === "otp") setStage("email")
+    else setStage("otp")
+  }
+
+  return <div className="auth-page"><PublicNav view="signup" onNavigate={() => {}} /><main className="auth-stage"><AuthDecor /><div className="auth-card auth-card-surface max-w-[600px]">
+    <button className="back-link" onClick={goBack}><ChevronLeft size={16} /> Back</button>
+    {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Student / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
+    {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
+    {stage === "otp" && <><p className="eyebrow mt-5">Email verification</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Check your inbox.</h1><form className="mt-6 space-y-5" onSubmit={checkCode}><p className="auth-copy">Enter the six-digit code sent to <b>{email}</b>.</p>{demoCode && <p className="form-error">Local development code: {demoCode}</p>}<label className="field-label" htmlFor="signup-otp">One-time password</label><input className="plain-input w-full text-center tracking-[0.35em]" id="signup-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify email"}<ChevronRight size={16} /></button><button type="button" className="text-button" disabled={busy} onClick={async () => { setError(""); try { const result = await startRegistration(email, external ? "External User" : "PLM"); setDemoCode(result.demoCode || ""); setCode("") } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") } }}>Resend code</button></form></>}
+    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
+  </div></main></div>
+}
 function AuthDecor() {
   return (
     <div className="auth-decor" aria-hidden="true">
@@ -1189,6 +1371,14 @@ function ForgotPassword({
   onNavigate: (view: AuthView) => void
 }) {
   const [step, setStep] = useState(1)
+  const [email, setEmail] = useState("")
+  const [code, setCode] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [demoCode, setDemoCode] = useState("")
+  const [error, setError] = useState("")
+  const [busy, setBusy] = useState(false)
   return (
     <div className="auth-page">
       <PublicNav view="forgot" onNavigate={onNavigate} />
@@ -1203,78 +1393,74 @@ function ForgotPassword({
           </div>
           <p className="eyebrow mt-6">Account recovery</p>
           <h1 className="auth-title">
-            {step === 1
-              ? "Reset your password."
-              : step === 2
-                ? "Check your email."
-                : "Password updated."}
+            {step === 1 ? "Reset your password." : step === 2 ? "Verify the code." : step === 3 ? "Choose a new password." : "Password updated."}
           </h1>
           {step === 1 && (
             <>
               <p className="auth-copy">
-                Enter your registered email and we’ll send a secure reset code.
+                Enter the email address linked to your account. We'll send a reset code to its inbox.
               </p>
-              <div className="mt-7">
-                <Field
-                  label="Registered email address"
-                  name="email"
-                  type="email"
-                  placeholder="Email Address"
-                />
-              </div>
+              <label className="field-label mt-7 block" htmlFor="reset-email">Account email address</label>
+              <input id="reset-email" className="plain-input mt-2 w-full" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" />
+              {error && <div className="form-error mt-4">{error}</div>}
               <button
                 className="btn-primary mt-6 w-full"
-                onClick={() => setStep(2)}
+                disabled={busy || !email.trim()}
+                onClick={async () => {
+                  setBusy(true); setError("")
+                  try {
+                    const result = await requestPasswordReset(email)
+                    setDemoCode(result.demoCode || "")
+                    setCode(result.demoCode || "")
+                    setStep(2)
+                  } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not request a reset code.") }
+                  finally { setBusy(false) }
+                }}
               >
-                Send reset code <Send size={16} />
+                {busy ? "Sending…" : "Send reset code"} <Send size={16} />
               </button>
             </>
           )}
           {step === 2 && (
             <>
-              <p className="auth-copy">
-                For this demonstration, enter any code and choose a new
-                password.
-              </p>
+              <p className="auth-copy">Enter the six-digit code sent to {email}. You’ll set a new password after verification.</p>
+              {demoCode && <p className="form-error mt-4">Local demo code: {demoCode}</p>}
               <div className="mt-7 space-y-4">
-                <Field
-                  label="Verification code"
-                  name="code"
-                  placeholder="6-digit code"
-                />
-                <Field
-                  label="New password"
-                  name="new-password"
-                  type="password"
-                  placeholder="At least 8 characters"
-                />
-                <Field
-                  label="Confirm new password"
-                  name="confirm"
-                  type="password"
-                  placeholder="Repeat new password"
-                />
+                <label className="field-label block" htmlFor="reset-code">Verification code</label>
+                <input id="reset-code" className="plain-input w-full text-center tracking-[0.35em]" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6-digit code" />
               </div>
+              {error && <div className="form-error mt-4">{error}</div>}
               <button
                 className="btn-primary mt-6 w-full"
-                onClick={() => setStep(3)}
+                disabled={busy || code.length !== 6}
+                onClick={async () => {
+                  setBusy(true); setError("")
+                  try { await verifyPasswordReset(email, code); setStep(3) }
+                  catch (cause) { setError(cause instanceof Error ? cause.message : "Code verification failed.") }
+                  finally { setBusy(false) }
+                }}
               >
-                Update password <Check size={16} />
+                {busy ? "Verifying…" : "Verify code"} <Check size={16} />
               </button>
             </>
           )}
           {step === 3 && (
             <>
-              <p className="auth-copy">
-                Your password has been reset successfully. You can now sign in
-                with your new credentials.
-              </p>
-              <button className="btn-primary mt-7 w-full" onClick={onBack}>
-                Return to login <ChevronRight size={16} />
-              </button>
+              <p className="auth-copy">Your code is verified. Create a strong new password.</p>
+              <label className="field-label mt-5 block" htmlFor="new-password">New password</label>
+              <div className="field-wrap"><input id="new-password" className="w-full" type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="8+ chars, uppercase, number, symbol" /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div>
+              <label className="field-label mt-4 block" htmlFor="confirm-password">Confirm new password</label>
+              <div className="field-wrap"><input id="confirm-password" className="w-full" type={showPassword ? "text" : "password"} value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat new password" /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div>
+              {error && <div className="form-error mt-4">{error}</div>}
+              <button className="btn-primary mt-6 w-full" disabled={busy || !password || !confirm} onClick={async () => { if (!/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(password)) { setError("Password needs 8+ characters, uppercase, a number, and a special character."); return } if (password !== confirm) { setError("Passwords do not match."); return } setBusy(true); setError(""); try { await resetPassword(email, code, password); setStep(4) } catch (cause) { setError(cause instanceof Error ? cause.message : "Password reset failed.") } finally { setBusy(false) } }}>{busy ? "Updating…" : "Change password"}<Check size={16} /></button>
             </>
           )}
-        </div>
+          {step === 4 && (
+            <>
+              <p className="auth-copy">Your password has been reset successfully. You can now sign in with your new credentials.</p>
+              <button className="btn-primary mt-7 w-full" onClick={onBack}>Return to login <ChevronRight size={16} /></button>
+            </>
+          )}        </div>
       </main>
     </div>
   )
@@ -1309,7 +1495,7 @@ function Field({
         <input
           id={name}
           name={name}
-          type={type === "password" ? "password" : "text"}
+          type={type}
           placeholder={placeholder}
           inputMode={inputMode}
           pattern={pattern}
@@ -1385,16 +1571,42 @@ function AccountCard({
 export default function App() {
   const [currentUser, setCurrentUser] = useState<DemoUser | null>(null)
   const [page, setPage] = useState<Page>("browse")
-  const [items, setItems] = useState(initialItems)
-  const [claims, setClaims] = useState(initialClaims)
-  const [conversations, setConversations] = useState(initialConversations)
-  const [notifications, setNotifications] = useState(initialNotifications)
-  const [selectedItem, setSelectedItem] = useState<Item | null>(null)
+  const [items, setItems] = useState<ApiItem[]>([])
+  const [claims, setClaims] = useState<ApiClaim[]>([])
+  const [conversations, setConversations] = useState<ApiConversation[]>([])
+  const [notifications, setNotifications] = useState<ApiNotification[]>([])
+  const [selectedItem, setSelectedItem] = useState<ApiItem | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [toast, setToast] = useState("")
-  const [verificationAttempts, setVerificationAttempts] = useState<string[]>(
-    readVerificationAttempts,
-  )
+
+  function mapUser(user: ApiUser): DemoUser {
+    return {
+      ...user,
+      initials: user.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(),
+    }
+  }
+
+  function applyWorkspace(data: Awaited<ReturnType<typeof bootstrap>>) {
+    setCurrentUser(mapUser(data.user))
+    setItems(data.items.map((item) => ({ ...item, mine: item.ownerId === data.user.id })))
+    setClaims(data.claims)
+    setConversations(data.conversations)
+    setNotifications(data.notifications)
+  }
+
+  async function refreshWorkspace() {
+    const data = await bootstrap()
+    applyWorkspace(data)
+    return data
+  }
+
+  useEffect(() => {
+    let active = true
+    void bootstrap().then((data) => {
+      if (active) applyWorkspace(data)
+    }).catch(() => clearSession())
+    return () => { active = false }
+  }, [])
 
   function notify(message: string) {
     setToast(message)
@@ -1407,24 +1619,11 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
-  function recordVerificationAttempt(userId: string, itemId: number) {
-    const key = `${userId}:${itemId}`
-    const storedAttempts = readVerificationAttempts()
-    if (storedAttempts.includes(key)) return false
-    const nextAttempts = [...storedAttempts, key]
-    window.localStorage.setItem(
-      verificationStorageKey,
-      JSON.stringify(nextAttempts),
-    )
-    setVerificationAttempts(nextAttempts)
-    return true
-  }
-
   if (!currentUser)
     return (
       <Auth
-        onLogin={(user) => {
-          setCurrentUser(user)
+        onLogin={async () => {
+          await refreshWorkspace()
           setPage("browse")
         }}
       />
@@ -1454,7 +1653,7 @@ export default function App() {
             >
               <Icon size={18} />
               <span>{label}</span>
-              {id === "chat" && <span className="nav-count">2</span>}
+              {id === "chat" && conversations.some((entry) => entry.unread > 0) && <span className="nav-count">{conversations.reduce((sum, entry) => sum + entry.unread, 0)}</span>}
               {id === "notifications" && unread > 0 && (
                 <span className="nav-count gold">{unread}</span>
               )}
@@ -1476,11 +1675,15 @@ export default function App() {
               <b>{currentUser.name}</b>
               <small>{currentUser.accountType}</small>
             </span>
-            <MoreHorizontal size={18} />
           </button>
           <button
             className="logout-button"
-            onClick={() => setCurrentUser(null)}
+            onClick={async () => {
+              await logout()
+              setCurrentUser(null)
+              setItems([]); setClaims([]); setConversations([]); setNotifications([])
+              goTo("browse")
+            }}
           >
             <LogOut size={16} /> Sign out
           </button>
@@ -1543,8 +1746,9 @@ export default function App() {
             <ReportForm
               onCancel={() => goTo("browse")}
               user={currentUser}
-              onSubmit={(item) => {
-                setItems((all) => [item, ...all])
+              onSubmit={async (item) => {
+                await createItem(item)
+                await refreshWorkspace()
                 goTo("browse")
                 notify("Your report is now live in Browse Items.")
               }}
@@ -1556,58 +1760,23 @@ export default function App() {
               claims={claims}
               currentUserId={currentUser.id}
               onSelect={setSelectedItem}
-              onUpdateClaim={(claimId, status) => {
-                const claim = claims.find((entry) => entry.id === claimId)
-                if (!claim) return
-                setClaims((all) =>
-                  all.map((entry) =>
-                    entry.id === claimId ? { ...entry, status } : entry,
-                  ),
-                )
-                setItems((all) =>
-                  all.map((item) =>
-                    item.id === claim.itemId
-                      ? {
-                          ...item,
-                          status: status === "Approved" ? "Claimed" : "Found",
-                        }
-                      : item,
-                  ),
-                )
-                setNotifications((all) => [
-                  {
-                    id: Date.now(),
-                    type: status.toLowerCase(),
-                    title: `Claim ${status.toLowerCase()}`,
-                    text: `${claim.claimant} was notified about your decision.`,
-                    time: "Just now",
-                    unread: true,
-                    target: "activity",
-                  },
-                  ...all,
-                ])
-                notify(`Claim ${status.toLowerCase()} and claimant notified.`)
+              onUpdateClaim={async (claimId, status) => {
+                try {
+                  await updateClaim(claimId, status)
+                  await refreshWorkspace()
+                  notify(`Claim ${status.toLowerCase()} and claimant notified.`)
+                } catch (cause) { notify(cause instanceof Error ? cause.message : "Could not update claim.") }
               }}
-              onReturned={(itemId) => {
-                const returnedItem = items.find((item) => item.id === itemId)
-                setItems((all) =>
-                  all.map((item) =>
-                    item.id === itemId ? { ...item, status: "Returned" } : item,
-                  ),
-                )
-                setNotifications((all) => [
-                  {
-                    id: Date.now(),
-                    type: "return",
-                    title: "Item successfully returned",
-                    text: `${returnedItem?.name || "The item"} was marked as returned.`,
-                    time: "Just now",
-                    unread: true,
-                    target: "activity",
-                  },
-                  ...all,
-                ])
-                notify("Item marked as returned. Recovery complete.")
+              onReturned={async (itemId) => {
+                try {
+                  await markReturned(itemId)
+                  await refreshWorkspace()
+                  notify("Item marked as returned. Recovery complete.")
+                } catch (cause) { notify(cause instanceof Error ? cause.message : "Could not update item.") }
+              }}
+              onUndoReturned={async (itemId) => {
+                try { await undoReturned(itemId); await refreshWorkspace(); notify("Return undone. Claims are open again.") }
+                catch (cause) { notify(cause instanceof Error ? cause.message : "Could not undo return.") }
               }}
             />
           )}
@@ -1615,8 +1784,8 @@ export default function App() {
             <Chat
               conversations={conversations}
               items={items}
-              currentUser={currentUser}
               setConversations={setConversations}
+              onRefresh={refreshWorkspace}
             />
           )}
           {page === "notifications" && (
@@ -1624,13 +1793,27 @@ export default function App() {
               notifications={notifications}
               setNotifications={setNotifications}
               goTo={goTo}
+              onRead={async (notification, unread) => {
+                try { await setNotificationRead(String(notification.id), unread) }
+                catch (cause) { notify(cause instanceof Error ? cause.message : "Could not update notification.") }
+              }}
             />
           )}
           {page === "profile" && (
             <Profile
               user={currentUser}
               notify={notify}
-              onLogout={() => setCurrentUser(null)}
+              onLogout={async () => {
+                await logout()
+                setCurrentUser(null)
+                setItems([]); setClaims([]); setConversations([]); setNotifications([])
+              }}
+              onSave={async (photo) => {
+                const user = await saveProfile({ photo })
+                setCurrentUser(mapUser(user))
+              }}
+              reportCount={items.filter((item) => item.ownerId === currentUser.id).length}
+              returnCount={items.filter((item) => item.ownerId === currentUser.id && item.status === "Returned").length}
             />
           )}
         </main>
@@ -1638,84 +1821,26 @@ export default function App() {
       {selectedItem && (
         <ItemModal
           item={selectedItem}
-          verificationAlreadySubmitted={
-            verificationAttempts.includes(
-              `${currentUser.id}:${selectedItem.id}`,
-            ) ||
-            readVerificationAttempts().includes(
-              `${currentUser.id}:${selectedItem.id}`,
-            )
-          }
+          verificationAlreadySubmitted={claims.some((claim) => claim.itemId === selectedItem.id && claim.claimantId === currentUser.id)}
           onClose={() => setSelectedItem(null)}
-          onMessage={() => {
-            setSelectedItem(null)
-            goTo("chat")
+          onMessage={async () => {
+            try {
+              const conversation = await startConversation(selectedItem.id)
+              setConversations((all) => all.some((entry) => entry.id === conversation.id) ? all : [conversation, ...all])
+              setSelectedItem(null)
+              goTo("chat")
+            } catch (cause) { notify(cause instanceof Error ? cause.message : "Could not start a conversation.") }
           }}
-          onClaim={(proof, explanation) => {
-            if (!recordVerificationAttempt(currentUser.id, selectedItem.id)) {
-              return false
-            }
-            const claim: Claim = {
-              id: Date.now(),
-              itemId: selectedItem.id,
-              claimant: currentUser.name,
-              claimantId: currentUser.id,
-              accountType: currentUser.accountType,
-              status: "Pending",
-              requested: "Just now",
-              verified: true,
-              explanation,
-              proof,
-            }
-            setClaims((all) => [claim, ...all])
-            setNotifications((all) => [
-              {
-                id: Date.now(),
-                type: "claim",
-                title: "New claim request",
-                text: `${currentUser.name} submitted a claim for ${selectedItem.name}.`,
-                time: "Just now",
-                unread: true,
-                target: "activity",
-              },
-              ...all,
-            ])
-            setItems((all) =>
-              all.map((item) =>
-                item.id === selectedItem.id
-                  ? { ...item, status: "Pending Claim" }
-                  : item,
-              ),
-            )
-            const existing = conversations.find(
-              (conversation) => conversation.itemId === selectedItem.id,
-            )
-            if (!existing) {
-              setConversations((all) => [
-                {
-                  id: Date.now(),
-                  itemId: selectedItem.id,
-                  user: currentUser.name,
-                  avatar: currentUser.name
-                    .split(" ")
-                    .map((part) => part[0])
-                    .join(""),
-                  unread: 0,
-                  messages: [
-                    {
-                      id: 1,
-                      mine: true,
-                      text: `Hi, I submitted an ownership claim for ${selectedItem.name}.`,
-                      time: "Now",
-                    },
-                  ],
-                },
-                ...all,
-              ])
-            }
+          onClaim={async (answer, proof, explanation) => {
+            await createClaim({ itemId: selectedItem.id, answer, proof, explanation })
+            await refreshWorkspace()
             setSelectedItem(null)
             notify("Claim submitted. A secure conversation is now available.")
             return true
+          }}
+          onUndoReturn={async () => {
+            try { await undoReturned(selectedItem.id); await refreshWorkspace(); setSelectedItem(null); notify("Return undone. Claims are open again.") }
+            catch (cause) { notify(cause instanceof Error ? cause.message : "Could not undo return.") }
           }}
         />
       )}
@@ -1819,13 +1944,13 @@ function Browse({
           )}
         </div>
         <div className="status-toggle">
-          {["All", "Lost", "Found"].map((value) => (
+          {["All", "Lost", "Found", "Returned"].map((value) => (
             <button
               key={value}
               className={status === value ? "active" : ""}
               onClick={() => setStatus(value)}
             >
-              {value}
+              {value === "Lost" ? "Lost items" : value === "Found" ? "Found items" : value}
             </button>
           ))}
         </div>
@@ -1899,6 +2024,7 @@ function ItemCard({ item, onClick }: ItemCardProps) {
           <div>
             <p className="item-category">{item.category}</p>
             <h3>{item.name}</h3>
+            {(item.status === "Lost" || item.status === "Found") && <small className="block text-blue-700">{item.status === "Lost" ? "Owner is looking for this" : "Finder is looking for the owner"}</small>}
           </div>
           <button className="card-arrow" aria-label={`View ${item.name}`}>
             <ChevronRight size={18} />
@@ -1935,11 +2061,12 @@ function ItemCard({ item, onClick }: ItemCardProps) {
 }
 
 function StatusBadge({ status }: { status: ItemStatus | ClaimStatus }) {
+  const label = status === "Lost" ? "LOST ITEM" : status === "Found" ? "FOUND ITEM" : status === "Returned" ? "RETURNED TO OWNER" : status === "Pending Claim" ? "CLAIM PENDING" : status
   return (
     <span
       className={`status-badge status-${status.toLowerCase().replace(" ", "-")}`}
     >
-      {status}
+      {label}
     </span>
   )
 }
@@ -1950,22 +2077,26 @@ function ReportForm({
   user,
 }: {
   onCancel: () => void
-  onSubmit: (item: Item) => void
+  onSubmit: (item: Item) => Promise<void>
   user: DemoUser
 }) {
   const [kind, setKind] = useState<"Lost" | "Found">("Lost")
   const [rewardType, setRewardType] = useState<RewardType>("none")
   const [preview, setPreview] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState("")
   const fileRef = useRef<HTMLInputElement>(null)
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    onSubmit({
+    setSaving(true)
+    setSaveError("")
+    try { await onSubmit({
       id: Date.now(),
       name: String(form.get("name")),
       category: String(form.get("category")),
       status: kind,
-      date: "Just now",
+      date: String(form.get("date") || ""),
       location: String(form.get("location")),
       description: String(form.get("description")),
       image: preview || (kind === "Lost" ? photos.books : photos.tech),
@@ -1985,7 +2116,9 @@ function ReportForm({
           ? String(form.get("rewardDescription"))
           : undefined,
       mine: true,
-    })
+    }) } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : "Could not save this report.")
+    } finally { setSaving(false) }
   }
   return (
     <div className="page-narrow">
@@ -2058,7 +2191,7 @@ function ReportForm({
             />
             <div className="sm:col-span-2">
               <label className="field-label" htmlFor="description">
-                Description and identifying marks
+                ITEM DESCRIPTION
               </label>
               <textarea
                 id="description"
@@ -2090,7 +2223,7 @@ function ReportForm({
                 <Field
                   label="Expected correct answer"
                   name="answer"
-                  type="password"
+                  type="text"
                   placeholder="Private answer"
                 />
               </div>
@@ -2163,7 +2296,14 @@ function ReportForm({
             className="hidden"
             onChange={(event) => {
               const file = event.target.files?.[0]
-              if (file) setPreview(URL.createObjectURL(file))
+              if (!file) return
+              if (file.size > 2 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
+                event.target.value = ""
+                return
+              }
+              const reader = new FileReader()
+              reader.onload = () => setPreview(String(reader.result || ""))
+              reader.readAsDataURL(file)
             }}
           />
           <button
@@ -2179,7 +2319,7 @@ function ReportForm({
                   <Camera size={24} />
                 </span>
                 <b>Upload a clear item photo</b>
-                <small>PNG or JPG, up to 10MB</small>
+                <small>PNG or JPG, up to 2 MB</small>
               </>
             )}
           </button>
@@ -2188,10 +2328,11 @@ function ReportForm({
           <button type="button" className="btn-tertiary" onClick={onCancel}>
             Cancel
           </button>
-          <button className="btn-primary" type="submit">
-            <Send size={16} /> Submit report
+          <button className="btn-primary" type="submit" disabled={saving}>
+            <Send size={16} /> {saving ? "Saving report…" : "Submit report"}
           </button>
         </div>
+        {saveError && <div className="form-error mt-4">{saveError}</div>}
       </form>
     </div>
   )
@@ -2221,12 +2362,14 @@ function ItemModal({
   onClose,
   onMessage,
   onClaim,
+  onUndoReturn,
 }: {
   item: Item
   verificationAlreadySubmitted: boolean
   onClose: () => void
-  onMessage: () => void
-  onClaim: (proof: string, explanation: string) => boolean
+  onMessage: () => void | Promise<void>
+  onClaim: (answer: string, proof: string, explanation: string) => Promise<boolean>
+  onUndoReturn: () => void | Promise<void>
 }) {
   const [claimStep, setClaimStep] = useState<"detail" | "verify" | "proof">(
     "detail",
@@ -2237,6 +2380,7 @@ function ItemModal({
   const [explanation, setExplanation] = useState("")
   const [duplicateDialog, setDuplicateDialog] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [claimError, setClaimError] = useState("")
   return (
     <div
       className="modal-backdrop"
@@ -2257,6 +2401,7 @@ function ItemModal({
             <>
               <p className="item-category">{item.category}</p>
               <h2>{item.name}</h2>
+              {(item.status === "Lost" || item.status === "Found") && <small className="block text-blue-700">{item.status === "Lost" ? "Owner is looking for this" : "Finder is looking for the owner"}</small>}
               <div className="modal-meta">
                 <span>
                   <MapPin />
@@ -2310,9 +2455,10 @@ function ItemModal({
                 </span>
               </div>
               <div className="modal-actions">
-                <button className="btn-secondary" onClick={onMessage}>
-                  <MessageCircle size={16} /> Message reporter
-                </button>
+                {!item.mine && <button className="btn-secondary" onClick={onMessage}>
+                  <MessageCircle size={16} /> {item.status === "Returned" ? "Think this is yours? Message the finder" : "Message reporter"}
+                </button>}
+                {item.mine && item.status === "Returned" && <button className="btn-primary" onClick={onUndoReturn}>Undo return</button>}
                 {(item.status === "Found" ||
                   item.status === "Pending Claim") && (
                   <button
@@ -2325,7 +2471,7 @@ function ItemModal({
                       }
                     }}
                   >
-                    <ShieldCheck size={16} /> Start ownership claim
+                    <ShieldCheck size={16} /> Request to claim
                   </button>
                 )}
               </div>
@@ -2345,9 +2491,8 @@ function ItemModal({
               <p className="eyebrow">Step 1 of 2</p>
               <h2>Verify ownership</h2>
               <p className="modal-description">
-                Answer the finder’s private question to continue. During
-                prototype testing, any response is accepted and does not approve
-                the claim automatically.
+                Answer the finder's private question to continue. Your answer is
+                checked privately and does not approve the claim automatically.
               </p>
               <div className="question-card">
                 <HelpCircle size={18} />
@@ -2368,10 +2513,21 @@ function ItemModal({
               />
               <button
                 className="btn-primary mt-5 w-full"
-                onClick={() => setClaimStep("proof")}
+                disabled={submitting || !answer.trim()}
+                onClick={async () => {
+                  setSubmitting(true)
+                  setClaimError("")
+                  try {
+                    await verifyAnswer(item.id, answer)
+                    setClaimStep("proof")
+                  } catch (cause) {
+                    setClaimError(cause instanceof Error ? cause.message : "Could not verify that answer.")
+                  } finally { setSubmitting(false) }
+                }}
               >
-                Verify and continue <ChevronRight size={16} />
+                {submitting ? "Checking…" : "Verify and continue"} <ChevronRight size={16} />
               </button>
+              {claimError && <div className="form-error mt-3">{claimError}</div>}
             </>
           )}
           {claimStep === "proof" && (
@@ -2401,11 +2557,11 @@ function ItemModal({
                     const file = event.target.files?.[0]
                     if (!file) return
                     setProofError("")
-                    const maxSize = 5 * 1024 * 1024 * 1024
+                    const maxSize = 2 * 1024 * 1024
                     if (file.size > maxSize) {
                       setProof("")
                       setProofError(
-                        "The uploaded file exceeds the 5 GB limit. Please choose a smaller file.",
+                        "The photo must be 2 MB or smaller.",
                       )
                       input.value = ""
                       return
@@ -2430,7 +2586,10 @@ function ItemModal({
                       input.value = ""
                       return
                     }
-                    setProof(URL.createObjectURL(file))
+                    const reader = new FileReader()
+                    reader.onload = () => setProof(String(reader.result || ""))
+                    reader.onerror = () => setProofError("Could not read that photo.")
+                    reader.readAsDataURL(file)
                   }}
                 />
                 {proof ? (
@@ -2447,8 +2606,7 @@ function ItemModal({
               </label>
               <p className="proof-helper">
                 Upload a photo of yourself with the item as additional proof of
-                ownership. Accepted formats: JPG and JPEG. Maximum file size: 5
-                GB.
+                ownership. Accepted formats: JPG and JPEG. Maximum file size: 2 MB.
               </p>
               {proofError && (
                 <div className="form-error mt-3">
@@ -2469,19 +2627,26 @@ function ItemModal({
               <button
                 className="btn-primary mt-5 w-full"
                 disabled={submitting}
-                onClick={() => {
+                onClick={async () => {
                   if (submitting) return
                   setSubmitting(true)
-                  const accepted = onClaim(proof, explanation)
-                  if (!accepted) {
-                    setSubmitting(false)
+                  setClaimError("")
+                  try {
+                    const accepted = await onClaim(answer, proof, explanation)
+                    if (!accepted) {
                     setClaimStep("detail")
                     setDuplicateDialog(true)
+                    }
+                  } catch (cause) {
+                    setClaimError(cause instanceof Error ? cause.message : "Could not submit the claim.")
+                  } finally {
+                    setSubmitting(false)
                   }
                 }}
               >
-                Submit claim request <Send size={16} />
+                {submitting ? "Submitting…" : "Submit claim request"} <Send size={16} />
               </button>
+              {claimError && <div className="form-error mt-3">{claimError}</div>}
             </>
           )}
         </div>
@@ -2529,13 +2694,15 @@ function Activity({
   onSelect,
   onUpdateClaim,
   onReturned,
+  onUndoReturned,
 }: {
   items: Item[]
   claims: Claim[]
   currentUserId: string
   onSelect: (item: Item) => void
-  onUpdateClaim: (id: number, status: ClaimStatus) => void
+  onUpdateClaim: (id: number, status: "Approved" | "Rejected") => void
   onReturned: (id: number) => void
+  onUndoReturned: (id: number) => void
 }) {
   const [tab, setTab] = useState<"reported" | "claims" | "found">("reported")
   const myItems = items.filter((item) => item.mine)
@@ -2590,6 +2757,8 @@ function Activity({
                   >
                     Mark as returned
                   </button>
+                ) : item.status === "Returned" ? (
+                  <button className="btn-small" onClick={(event) => { event.stopPropagation(); onUndoReturned(item.id) }}>Undo return</button>
                 ) : (
                   <button className="icon-button">
                     <Pencil size={16} />
@@ -2624,59 +2793,32 @@ function Activity({
       )}
       {tab === "found" && (
         <div className="space-y-4">
-          {incoming.map((claim) => {
-            const item = items.find((entry) => entry.id === claim.itemId)!
+          {[...new Set(incoming.map((claim) => claim.itemId))].map((itemId) => {
+            const item = items.find((entry) => entry.id === itemId)!
+            const itemClaims = incoming.filter((claim) => claim.itemId === itemId)
+            const pendingClaims = itemClaims.filter((claim) => claim.status === "Pending")
             return (
-              <article key={claim.id} className="claim-review">
+              <article key={itemId} className="claim-review">
                 <div className="claim-header">
                   <img src={item.image} alt="" />
                   <div>
                     <p className="item-category">{item.name}</p>
-                    <h3>{claim.claimant}</h3>
-                    <span>
-                      {claim.accountType} · Requested {claim.requested}
-                    </span>
-                  </div>
-                  <StatusBadge status={claim.status} />
-                </div>
-                <div className="claim-details">
-                  <div>
-                    <small>Ownership answer</small>
-                    <b>
-                      <CheckCircle2 size={15} /> Verified successfully
-                    </b>
-                  </div>
-                  <div>
-                    <small>Additional explanation</small>
-                    <p>{claim.explanation}</p>
+                    <h3>{item.description}</h3>
+                    <span>Reported by {item.reporter}</span>
                   </div>
                 </div>
-                {claim.status === "Pending" && (
-                  <div className="claim-actions">
-                    <button
-                      className="btn-reject"
-                      onClick={() => onUpdateClaim(claim.id, "Rejected")}
-                    >
-                      <XCircle size={16} /> Reject claim
-                    </button>
-                    <button
-                      className="btn-primary"
-                      onClick={() => onUpdateClaim(claim.id, "Approved")}
-                    >
-                      <CheckCircle2 size={16} /> Approve claim
-                    </button>
+                <div className="claim-details"><div><small>Pending ownership claim by</small><p>{pendingClaims.map((claim) => claim.claimant).join(", ") || "No pending claimants"}</p></div></div>
+                {pendingClaims.map((claim) => (
+                  <div key={claim.id} className="claim-actions">
+                    <span>{claim.claimant}</span>
+                    <button className="btn-reject" onClick={() => onUpdateClaim(claim.id, "Rejected")}><XCircle size={16} /> Reject</button>
+                    <button className="btn-primary" onClick={() => onUpdateClaim(claim.id, "Approved")}><CheckCircle2 size={16} /> Approve</button>
                   </div>
+                ))}
+                {itemClaims.some((claim) => claim.status === "Approved") && item.status !== "Returned" && (
+                  <div className="claim-actions"><button className="btn-primary" onClick={() => onReturned(item.id)}><PackageCheck size={16} /> Mark as returned</button></div>
                 )}
-                {claim.status === "Approved" && item.status !== "Returned" && (
-                  <div className="claim-actions">
-                    <button
-                      className="btn-primary"
-                      onClick={() => onReturned(item.id)}
-                    >
-                      <PackageCheck size={16} /> Mark as returned
-                    </button>
-                  </div>
-                )}
+                {item.status === "Returned" && <div className="claim-actions"><button className="btn-small" onClick={() => onUndoReturned(item.id)}>Undo return</button></div>}
               </article>
             )
           })}
@@ -2726,43 +2868,30 @@ function ActivityRow({
 function Chat({
   conversations,
   items,
-  currentUser,
   setConversations,
+  onRefresh,
 }: {
   conversations: Conversation[]
   items: Item[]
-  currentUser: DemoUser
   setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>
+  onRefresh: () => Promise<unknown>
 }) {
   const [selected, setSelected] = useState(conversations[0]?.id)
   const [message, setMessage] = useState("")
   const [search, setSearch] = useState("")
+  const [error, setError] = useState("")
   const conversation =
     conversations.find((entry) => entry.id === selected) || conversations[0]
   const item = items.find((entry) => entry.id === conversation?.itemId)
-  const conversationName =
-    currentUser.id === "finder" ? conversation?.user : item?.reporter
-  function send() {
+  const conversationName = conversation?.user
+  async function send() {
     if (!message.trim() || !conversation) return
-    setConversations((all) =>
-      all.map((entry) =>
-        entry.id === conversation.id
-          ? {
-              ...entry,
-              messages: [
-                ...entry.messages,
-                {
-                  id: Date.now(),
-                  mine: true,
-                  text: message.trim(),
-                  time: "Now",
-                },
-              ],
-            }
-          : entry,
-      ),
-    )
-    setMessage("")
+    setError("")
+    try {
+      await sendMessage(conversation.id, message.trim())
+      setMessage("")
+      await onRefresh()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send message.") }
   }
   return (
     <>
@@ -2792,21 +2921,13 @@ function Chat({
           <div className="conversation-scroll">
             {conversations
               .filter((entry) => {
-                const relatedItem = items.find(
-                  (candidate) => candidate.id === entry.itemId,
-                )
-                const displayName =
-                  currentUser.id === "finder"
-                    ? entry.user
-                    : relatedItem?.reporter
-                return displayName?.toLowerCase().includes(search.toLowerCase())
+                return entry.user.toLowerCase().includes(search.toLowerCase())
               })
               .map((entry) => {
                 const related = items.find(
                   (candidate) => candidate.id === entry.itemId,
                 )
-                const displayName =
-                  currentUser.id === "finder" ? entry.user : related?.reporter
+                const displayName = entry.user
                 const displayAvatar = displayName
                   ?.split(" ")
                   .map((part) => part[0])
@@ -2825,16 +2946,17 @@ function Chat({
                           item.id === entry.id ? { ...item, unread: 0 } : item,
                         ),
                       )
+                      void markConversationRead(entry.id).then(() => onRefresh())
                     }}
                   >
                     <span className="avatar">{displayAvatar}</span>
                     <span className="conversation-copy">
                       <span>
                         <b>{displayName}</b>
-                        <small>{last.time}</small>
+                      <small>{last?.time || "No messages yet"}</small>
                       </span>
                       <em>{related?.name}</em>
-                      <p>{last.text}</p>
+                      <p className={entry.unread > 0 ? "font-bold" : ""}>{last?.text || "Start the conversation"}</p>
                     </span>
                     {entry.unread > 0 && <i>{entry.unread}</i>}
                   </button>
@@ -2875,11 +2997,12 @@ function Chat({
                   key={entry.id}
                   className={`message-wrap ${entry.mine ? "mine" : ""}`}
                 >
-                  <div className="message">{entry.text}</div>
-                  <span>{entry.time}</span>
+                  <div className={`message ${!entry.mine && !entry.read ? "font-bold" : ""}`}>{entry.text}</div>
+                  <span>{entry.time}{entry.mine && <small className="ml-2">{entry.read ? "Seen" : "Sent"}</small>}</span>
                 </div>
               ))}
             </div>
+            {error && <div className="form-error mx-5">{error}</div>}
             <div className="message-compose">
               <button className="icon-button">
                 <Plus size={18} />
@@ -2911,10 +3034,12 @@ function Notifications({
   notifications,
   setNotifications,
   goTo,
+  onRead,
 }: {
-  notifications: typeof initialNotifications
-  setNotifications: React.Dispatch<React.SetStateAction<typeof initialNotifications>>
+  notifications: ApiNotification[]
+  setNotifications: React.Dispatch<React.SetStateAction<ApiNotification[]>>
   goTo: (page: Page) => void
+  onRead: (notification: ApiNotification, unread: boolean) => void
 }) {
   return (
     <>
@@ -2927,9 +3052,10 @@ function Notifications({
         <button
           className="text-button mb-7 whitespace-nowrap"
           onClick={() =>
-            setNotifications((all) =>
-              all.map((entry) => ({ ...entry, unread: false })),
-            )
+            {
+              setNotifications((all) => all.map((entry) => ({ ...entry, unread: false })))
+              notifications.filter((entry) => entry.unread).forEach((entry) => onRead(entry, false))
+            }
           }
         >
           <Check size={15} /> Mark all as read
@@ -2957,7 +3083,8 @@ function Notifications({
                       : entry,
                   ),
                 )
-                goTo(notification.target)
+                onRead(notification, false)
+                goTo(notification.target as Page)
               }}
             >
               <span className="notification-icon">
@@ -2983,12 +3110,26 @@ function Profile({
   user,
   notify,
   onLogout,
+  onSave,
+  reportCount,
+  returnCount,
 }: {
   user: DemoUser
   notify: (message: string) => void
-  onLogout: () => void
+  onLogout: () => void | Promise<void>
+  onSave: (photo: string) => Promise<void>
+  reportCount: number
+  returnCount: number
 }) {
-  const [editing, setEditing] = useState(false)
+  const [photo, setPhoto] = useState(user.photo || "")
+  const [photoError, setPhotoError] = useState("")
+  const photoRef = useRef<HTMLInputElement>(null)
+  const [phone] = useState(user.phone || "")
+  const [securityOpen, setSecurityOpen] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState("")
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [securityError, setSecurityError] = useState("")
   return (
     <>
       <PageTitle
@@ -2999,23 +3140,25 @@ function Profile({
       <div className="profile-grid">
         <aside className="profile-card">
           <div className="profile-photo">
-            {user.initials}
-            <button>
+            {photo ? <img src={photo} alt="Profile" /> : user.initials}
+            <input ref={photoRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) { setPhotoError("Profile photo must be 2 MB or smaller."); event.target.value = ""; return } const reader = new FileReader(); reader.onload = async () => { const next = String(reader.result || ""); try { await onSave(next); setPhoto(next); setPhotoError(""); notify("Profile photo updated.") } catch (cause) { setPhotoError(cause instanceof Error ? cause.message : "Could not save photo.") } }; reader.readAsDataURL(file) }} />
+            <button type="button" onClick={() => photoRef.current?.click()} aria-label="Edit profile photo">
               <Camera size={15} />
             </button>
           </div>
+          {photoError && <small className="form-error">{photoError}</small>}
           <h2>{user.name}</h2>
-          <p>{user.course || user.school || user.role}</p>
+          <p>{user.email}</p>
           <span className="verified-chip">
             <ShieldCheck size={14} /> Verified {user.accountType}
           </span>
           <div className="profile-stats">
             <div>
-              <b>4</b>
+              <b>{reportCount}</b>
               <span>Reports</span>
             </div>
             <div>
-              <b>2</b>
+              <b>{returnCount}</b>
               <span>Returns</span>
             </div>
           </div>
@@ -3024,67 +3167,16 @@ function Profile({
           </button>
         </aside>
         <section className="settings-card">
-          <div className="settings-head">
-            <div>
-              <h3>Personal information</h3>
-              <p>Your verified university details are protected.</p>
-            </div>
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                if (editing) notify("Profile changes saved.")
-                setEditing((value) => !value)
-              }}
-            >
-              {editing ? (
-                <>
-                  <Check size={16} /> Save changes
-                </>
-              ) : (
-                <>
-                  <Pencil size={16} /> Edit profile
-                </>
-              )}
-            </button>
-          </div>
+          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : "PLM account details"}</h3><p>These verified details can't be edited here.</p></div></div>
           <div className="settings-fields">
-            <ProfileField
-              label="Full name"
-              value={user.name}
-              editable={editing}
-            />
-            <ProfileField
-              label={
-                user.accountType === "External User"
-                  ? "Verified email"
-                  : "Official email"
-              }
-              value={user.email}
-            />
-            <ProfileField
-              label={user.staffId ? "Staff ID" : "Student number"}
-              value={user.staffId || user.studentNumber || "Not applicable"}
-            />
-            <ProfileField
-              label="Year level"
-              value={user.yearLevel || "Not applicable"}
-              editable={editing}
-            />
-            <ProfileField
-              label="Course / Program"
-              value={user.course || user.school || "Not applicable"}
-              editable={editing}
-            />
-            <ProfileField
-              label="College"
-              value={user.college || user.school || "Not applicable"}
-            />
-            <ProfileField
-              label="Contact number"
-              value={user.phone || "Not provided"}
-              editable={editing}
-            />
-            <ProfileField label="Account type" value={user.accountType} />
+            <ProfileField label="Full name" value={user.name} />
+            <ProfileField label={user.accountType === "External User" ? "Account email" : "Official PLM email"} value={user.email} />
+            {user.accountType === "External User" ? (
+              <ProfileField label="School / University" value={user.school || "Not provided"} />
+            ) : (
+              <ProfileField label={user.staffId ? "Staff ID" : "Student number"} value={user.staffId || user.studentNumber || "Not provided"} />
+            )}
+            <ProfileField label="Contact number" value={phone} placeholder="Not provided" />
           </div>
           <div className="settings-divider" />
           <div className="settings-head">
@@ -3094,18 +3186,36 @@ function Profile({
             </div>
             <button
               className="btn-tertiary"
-              onClick={() =>
-                notify("Password change link prepared for this demo.")
-              }
+              onClick={() => { setSecurityError(""); setSecurityOpen((open) => !open) }}
             >
-              <KeyRound size={16} /> Change password
+              <KeyRound size={16} /> {securityOpen ? "Cancel password change" : "Change password"}
             </button>
           </div>
+          {securityOpen && (
+            <div className="settings-fields mt-5">
+              <label className="field-label" htmlFor="current-password">Current password</label>
+              <input id="current-password" className="plain-input" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+              <label className="field-label" htmlFor="profile-new-password">New password</label>
+              <input id="profile-new-password" className="plain-input" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+              <label className="field-label" htmlFor="profile-confirm-password">Confirm new password</label>
+              <input id="profile-confirm-password" className="plain-input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+              {securityError && <div className="form-error">{securityError}</div>}
+              <button className="btn-primary" onClick={async () => {
+                if (!/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(newPassword)) { setSecurityError("Password needs 8+ characters, uppercase, a number, and a special character."); return }
+                if (newPassword !== confirmPassword) { setSecurityError("Passwords do not match."); return }
+                try {
+                  await changePassword(currentPassword, newPassword)
+                  setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); setSecurityError(""); setSecurityOpen(false)
+                  notify("Password updated.")
+                } catch (cause) { setSecurityError(cause instanceof Error ? cause.message : "Could not update password.") }
+              }}>Update password</button>
+            </div>
+          )}
           <div className="security-status">
             <ShieldCheck size={20} />
             <div>
               <b>Email verification active</b>
-              <p>Your official PLM email was verified on May 3, 2025.</p>
+              <p>Your account email has been verified.</p>
             </div>
             <CheckCircle2 size={18} />
           </div>
@@ -3119,10 +3229,14 @@ function ProfileField({
   label,
   value,
   editable = false,
+  onChange,
+  placeholder,
 }: {
   label: string
   value: string
   editable?: boolean
+  onChange?: (value: string) => void
+  placeholder?: string
 }) {
   return (
     <div>
@@ -3130,7 +3244,10 @@ function ProfileField({
         {label}
         {!editable && <LockKeyhole size={11} />}
       </label>
-      <input defaultValue={value} disabled={!editable} />
+        <input value={value} placeholder={placeholder} disabled={!editable} onChange={(event) => onChange?.(event.target.value)} />
     </div>
   )
 }
+
+
+
