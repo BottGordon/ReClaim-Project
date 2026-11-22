@@ -443,6 +443,26 @@ async function handleAdmin(req, res, route, method, user) {
 }
 
 async function handler(req, res) {
+    const origin = req.headers.origin
+  const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8443")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin)
+    res.setHeader("Vary", "Origin")
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+  }
+
+  if (req.method === "OPTIONS") {
+    if (!origin || !allowedOrigins.includes(origin)) {
+      return send(res, 403, { error: "Origin not allowed." })
+    }
+    res.writeHead(204)
+    return res.end()
+  }
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`)
   const route = url.pathname.replace(/\/+$/, "") || "/"
   const method = req.method || "GET"
