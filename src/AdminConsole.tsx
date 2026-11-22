@@ -430,10 +430,10 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                   <div className="claimant-card"><div>{selectedClaim.claimant.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div><span><b>{selectedClaim.claimant}{claimant?.studentNumber ? ` (${claimant.studentNumber})` : ""}</b><small>{["PLM", "PLM Student"].includes(selectedClaim.accountType) ? "PLM Resident" : selectedClaim.accountType}</small></span></div>
                   <div className="claim-answer">
                     <small>Ownership verification</small><p>"{selectedClaim.explanation}"</p>
-                    {selectedClaim.proof?.startsWith("data:image/") && <figure className="claim-proof-photo">
-                      <figcaption>Submitted proof photo</figcaption>
-                      <img src={selectedClaim.proof} alt="Ownership evidence submitted by the claimant" />
-                    </figure>}
+                    {selectedClaim.proof?.startsWith("data:image/") ? <details className="claim-proof-photo" key={selectedClaim.id}>
+                      <summary>Click to see Photo of Proof</summary>
+                      <img src={selectedClaim.proof} alt="Ownership evidence submitted by the claimant" loading="lazy" />
+                    </details> : <p className="claim-proof-missing">No photo attached</p>}
                   </div>
                 </section>
               </div>
