@@ -1,3 +1,5 @@
+import { getSupabaseClient, supabase } from "./supabase"
+
 const TOKEN_KEY = "reclaim.session"
 const REMEMBER_KEY = "reclaim.remember"
 const API_BASE = import.meta.env.VITE_API_BASE || ""
@@ -6,7 +8,7 @@ export type ApiUser = {
   id: string
   name: string
   initials?: string
-  accountType: "PLM Student" | "PLM Staff" | "External User"
+  accountType: "PLM Resident" | "PLM Student" | "PLM Staff" | "External User"
   email: string
   studentNumber?: string
   staffId?: string
@@ -37,6 +39,11 @@ export type ApiItem = {
   rewardType?: "none" | "money" | "other"
   rewardAmount?: string
   rewardDescription?: string
+  custodyDeskId?: string
+  shelfTag?: string
+  privacy?: "Held" | "Published"
+  privateNotes?: string
+  originalContent?: Pick<ApiItem, "name" | "description" | "image" | "question">
 }
 
 export type ApiClaim = {
@@ -72,10 +79,32 @@ export type ApiNotification = {
 }
 export type Bootstrap = {
   user: ApiUser
+  isAdmin: boolean
   items: ApiItem[]
   claims: ApiClaim[]
   conversations: ApiConversation[]
   notifications: ApiNotification[]
+}
+
+export type AdminUser = Pick<ApiUser, "id" | "name" | "email" | "studentNumber" | "staffId" | "role">
+export type AdminDesk = { id: string; name: string; active: boolean }
+export type AdminOverview = {
+  users: AdminUser[]
+  items: ApiItem[]
+  claims: ApiClaim[]
+  desks: AdminDesk[]
+  matches: { lostId: number; foundId: number; linked: boolean }[]
+  notifications: ApiNotification[]
+  claimThreads: { claimId: number; messages: ApiMessage[] }[]
+  stats: {
+    items: number
+    pendingClaims: number
+    returnedItems: number
+    inCustody: number
+    activeReports: number
+    returnRate: number
+    analytics: { location: string; reports: number; returned: number }[]
+  }
 }
 
 type ApiError = Error & { status?: number; code?: string }
@@ -114,35 +143,129 @@ export function clearSession() {
 }
 
 export async function login(email: string, password: string, remember = true) {
-  const result = await request<{ token: string; user: ApiUser }>("/auth/login", {
-    method: "POST", body: JSON.stringify({ email, password }),
-  })
-  rememberSession(result.token, remember)
-  return result.user
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  if (!error && data.session && data.user) {
+    try {
+      const result = await request<{ token: string }>("/auth/supabase-session", {
+        method: "POST", body: JSON.stringify({ accessToken: data.session.access_token }),
+      })
+      rememberSession(result.token, remember)
+      return
+    } catch (failure) {
+      await supabase.auth.signOut({ scope: "local" }).catch(() => {})
+      throw failure
+    }
+  }
+
+  try {
+    const result = await request<{ token: string }>("/auth/login", {
+      method: "POST", body: JSON.stringify({ email, password }),
+    })
+    rememberSession(result.token, remember)
+  } catch (failure) {
+    if (error) throw error
+    throw failure
+  }
 }
 
+const otpRequests = new Set<string>()
+const verifiedOtpRequests = new Set<string>()
+const completedRegistrations = new Set<string>()
+
 export async function register(input: Record<string, string>) {
-  return request<{ message: string; demoCode?: string }>("/auth/register", {
-    method: "POST", body: JSON.stringify(input),
+  const supabase = getSupabaseClient()
+  const email = String(input.email || "").trim().toLowerCase()
+  if (completedRegistrations.has(email)) {
+    throw new Error("This account has already been completed.")
+  }
+  const { error: updateError } = await supabase.auth.updateUser({
+    password: input.password,
+    data: {
+      full_name: input.name,
+      student_number: input.idNumber,
+      phone: input.phone,
+      account_type: input.accountType,
+    },
   })
+  if (updateError) throw updateError
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  if (sessionError) throw new Error("Could not restore the verified account session.")
+
+  const session = sessionData.session
+  if (!session?.access_token || !session.user) {
+    throw new Error("No verified account session exists. Please verify the OTP again.")
+  }
+
+  const profile = {
+    id: session.user.id,
+    email: session.user.email || input.email,
+    full_name: input.name,
+  }
+  const { error: profileError } = await supabase
+    .from("profiles")
+    .upsert(profile, { onConflict: "id" })
+  if (profileError) throw new Error(`Could not save the account profile: ${profileError.message}`)
+
+  const result = await request<{ token: string }>("/auth/supabase-session", {
+    method: "POST", body: JSON.stringify({ accessToken: session.access_token }),
+  })
+  rememberSession(result.token, true)
+  completedRegistrations.add(email)
+  return { message: "Account created. You can now sign in.", token: result.token }
 }
 
 export function startRegistration(email: string, accountType = "PLM") {
-  return request<{ message: string; demoCode?: string }>("/auth/start-registration", {
-    method: "POST", body: JSON.stringify({ email, accountType }),
+  const supabase = getSupabaseClient()
+  const normalizedEmail = email.trim().toLowerCase()
+  if (otpRequests.has(normalizedEmail) || verifiedOtpRequests.has(normalizedEmail)) {
+    return Promise.resolve({ message: "A verification code was already sent to your email inbox." })
+  }
+  otpRequests.add(normalizedEmail)
+  return supabase.auth.signInWithOtp({
+    email: normalizedEmail,
+    options: { shouldCreateUser: true },
+  }).then(({ error }) => {
+    if (error) {
+      otpRequests.delete(normalizedEmail)
+      throw error
+    }
+    return { message: "A verification code was sent to your email inbox." }
   })
 }
 
 export function verifyRegistrationEmail(email: string, code: string) {
-  return request<{ verified: boolean }>("/auth/verify-registration-email", {
-    method: "POST", body: JSON.stringify({ email, code }),
-  })
+  const supabase = getSupabaseClient()
+  const normalizedEmail = email.trim().toLowerCase()
+  if (verifiedOtpRequests.has(normalizedEmail)) {
+    return supabase.auth.getSession().then(({ data, error }) => {
+      if (error) throw new Error("Could not preserve the verified account session.")
+      if (!data.session) throw new Error("No verified account session exists. Please enter the OTP again.")
+      return { verified: true, session: data.session }
+    })
+  }
+  return supabase.auth.verifyOtp({ email, token: code, type: "email" })
+    .then(async ({ data, error }) => {
+      if (error) throw error
+      if (!data.session) throw new Error("The verification code did not return a Supabase session.")
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw new Error("Could not preserve the verified account session.")
+      if (!sessionData.session) throw new Error("No verified account session exists. Please enter the OTP again.")
+      verifiedOtpRequests.add(normalizedEmail)
+      return { verified: true, session: sessionData.session }
+    })
 }
 
 export async function resendVerification(email: string) {
-  return request<{ message: string; demoCode?: string }>("/auth/resend-verification", {
-    method: "POST", body: JSON.stringify({ email }),
+  const supabase = getSupabaseClient()
+  const normalizedEmail = email.trim().toLowerCase()
+  const { error } = await supabase.auth.signInWithOtp({
+    email: normalizedEmail,
+    options: { shouldCreateUser: true },
   })
+  if (error) throw error
+  return { message: "A new verification code was sent." }
 }
 
 export function requestPasswordReset(email: string) {
@@ -167,9 +290,60 @@ export function bootstrap() {
   return request<Bootstrap>("/bootstrap")
 }
 
+export function adminOverview() {
+  return request<AdminOverview>("/admin/overview")
+}
+
+export function adminUpdateClaim(id: number, status: "Approved" | "Rejected") {
+  return request<{ claim: ApiClaim; item: ApiItem }>(`/admin/claims/${id}`, {
+    method: "PATCH", body: JSON.stringify({ status }),
+  })
+}
+
+export function adminUpdateItemStatus(id: number, status: "Returned") {
+  return request<{ item: ApiItem }>(`/admin/items/${id}/status`, {
+    method: "PATCH", body: JSON.stringify({ status }),
+  })
+}
+
+type WalkIn = {
+  name: string; category: string; location: string; description: string
+  deskId: string; shelfTag: string; question: string; answer: string; privateNotes: string
+}
+export function adminLogWalkIn(input: WalkIn) {
+  return adminWrite("/items", "POST", input)
+}
+
+export function adminSetCustody(id: number, deskId: string | null, shelfTag: string) {
+  return adminWrite(`/items/${id}/custody`, "PATCH", { deskId, shelfTag })
+}
+
+export function adminModerate(id: number, input: { action: "hold" } | { action: "publish"; name: string; description: string; question?: string }) {
+  return adminWrite(`/items/${id}/privacy`, "PATCH", input)
+}
+
+export function adminLinkMatch(lostId: number, foundId: number) {
+  return adminWrite("/matches", "POST", { lostId, foundId })
+}
+
+export function adminSetDesk(id: string, active: boolean) {
+  return adminWrite(`/desks/${id}`, "PATCH", { active })
+}
+
+export function adminMessageClaimant(id: number, text: string) {
+  return adminWrite(`/claims/${id}/messages`, "POST", { text })
+}
+
+function adminWrite(path: string, method: "POST" | "PATCH", input: object) {
+  return request<unknown>(`/admin${path}`, { method, body: JSON.stringify(input) })
+}
+
 export async function logout() {
   try { await request<{ ok: boolean }>("/auth/logout", { method: "POST" }) }
-  finally { clearSession() }
+  finally {
+    clearSession()
+    await supabase?.auth.signOut({ scope: "local" }).catch(() => {})
+  }
 }
 
 export async function createItem(input: Omit<ApiItem, "id" | "date" | "reporter" | "reporterRole" | "ownerId" | "mine">) {

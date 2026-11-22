@@ -1,7 +1,7 @@
 import { createServer } from "node:http"
 import { randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from "node:crypto"
 import { promisify } from "node:util"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -16,9 +16,12 @@ try {
 } catch (error) {
   if (error.code !== "ENOENT") throw error
 }
-const dataDir = path.join(root, "data")
+const dataDir = process.env.RECLAIM_DATA_DIR || path.join(root, "data")
 const dataFile = path.join(dataDir, "reclaim.json")
 const port = Number(process.env.API_PORT || 3001)
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://sqicephynnalidwgbxof.supabase.co"
+const supabasePublicKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 const maxBodyBytes = 6 * 1024 * 1024
 const sessions = new Map()
 const challenges = new Map()
@@ -27,7 +30,13 @@ const resetVerifiedEmails = new Map()
 const answerAttempts = new Map()
 let graphToken
 let graphTokenExpires = 0
-const emptyDb = { users: [], items: [], claims: [], conversations: [], notifications: [] }
+const emptyDb = {
+  users: [], items: [], claims: [], conversations: [], notifications: [], matches: [],
+  desks: [
+    { id: "osds", name: "OSDS Main Desk", active: true },
+    { id: "gate", name: "Intramuros Gate Guard Desk", active: true },
+  ],
+}
 const seedItems = [
   { id: 1, name: "Black leather wallet", category: "Accessories", status: "Found", date: "May 18, 2025", createdAt: "2025-05-18T09:00:00.000Z", location: "University Library, 2nd floor", description: "A slim black leather wallet was found beside the north reading area. Contents are secured and will be used only for ownership verification.", image: "https://images.unsplash.com/photo-1579014134953-1580d7f123f3?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080", reporter: "Mika Reyes", reporterRole: "PLM Student", ownerId: "seed-mika", question: "What small symbol is embossed inside the wallet?", answer: "star" },
   { id: 2, name: "Silver laptop with clear case", category: "Electronics", status: "Lost", date: "May 17, 2025", createdAt: "2025-05-17T15:30:00.000Z", location: "Gusaling Villegas, Room 307", description: "13-inch silver laptop in a clear shell with two small stickers near the trackpad. Last seen after an afternoon lecture.", image: "https://images.unsplash.com/photo-1589979034086-5885b60c8f59?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080", reporter: "Paolo Santos", reporterRole: "PLM Student", ownerId: "seed-paolo", rewardType: "money", rewardAmount: "500" },
@@ -41,7 +50,11 @@ const seedItems = [
 ]
 let writeQueue = Promise.resolve()
 function persist() {
-  writeQueue = writeQueue.then(() => writeFile(dataFile, JSON.stringify(db, null, 2)))
+  const snapshot = JSON.stringify(db, null, 2)
+  writeQueue = writeQueue.catch(() => {}).then(async () => {
+    await writeFile(`${dataFile}.tmp`, snapshot)
+    await rename(`${dataFile}.tmp`, dataFile)
+  })
   return writeQueue
 }
 
@@ -78,7 +91,11 @@ async function body(req) {
     chunks.push(chunk)
   }
   if (!size) return {}
-  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")) }
+  try {
+    const input = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error()
+    return input
+  }
   catch { throw Object.assign(new Error("Request body must be valid JSON."), { status: 400 }) }
 }
 
@@ -93,24 +110,55 @@ const dateNow = () => new Date().toISOString()
 const displayDate = () => new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date())
 const publicUser = (user) => {
   const { passwordHash, ...safe } = user
+  if (safe.accountType === "PLM" || safe.accountType === "PLM Student") {
+    safe.accountType = "PLM Resident"
+  }
+  if (safe.role === "PLM" || safe.role === "PLM Student") {
+    safe.role = "PLM Resident"
+  }
   return safe
 }
 const userById = (userId) => db.users.find((entry) => entry.id === userId)
 const itemById = (itemId) => db.items.find((entry) => entry.id === itemId)
 
-function currentUser(req) {
+function currentSession(req) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "")
-  const userId = token && sessions.get(token)
-  return userId ? userById(userId) : undefined
+  return token ? sessions.get(token) : undefined
+}
+function currentUser(req) {
+  return userById(currentSession(req)?.userId)
 }
 function requireUser(req) {
   const user = currentUser(req)
   if (!user) throw Object.assign(new Error("Sign in to continue."), { status: 401 })
   return user
 }
-function makeSession(user) {
+async function supabaseRequest(path, options = {}) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) throw Object.assign(new Error("Supabase admin storage is not configured."), { status: 503, code: "SUPABASE_NOT_CONFIGURED" })
+  const response = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+    ...options,
+    headers: { apikey: supabaseServiceRoleKey, Authorization: `Bearer ${supabaseServiceRoleKey}`, "Content-Type": "application/json", ...(options.headers || {}) },
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw Object.assign(new Error(payload.message || payload.error || "Supabase request failed."), { status: 502 })
+  return payload
+}
+async function supabaseProfile(authId) {
+  const [profile] = await supabaseRequest(`profiles?select=full_name,is_admin&id=eq.${encodeURIComponent(authId)}&limit=1`)
+  return profile
+}
+async function isAdmin(req) {
+  const authId = currentSession(req)?.authId
+  return Boolean(authId && (await supabaseProfile(authId))?.is_admin === true)
+}
+async function requireAdmin(req) {
+  const user = requireUser(req)
+  if (!(await isAdmin(req))) throw Object.assign(new Error("Administrator access is required."), { status: 403, code: "ADMIN_REQUIRED" })
+  return user
+}
+function makeSession(user, authId) {
   const token = randomBytes(32).toString("hex")
-  sessions.set(token, user.id)
+  sessions.set(token, { userId: user.id, authId })
   return { token, user: publicUser(user) }
 }
 async function passwordHash(password, salt = randomBytes(16).toString("hex")) {
@@ -185,6 +233,214 @@ async function sendVerificationEmail(purpose, email, code) {
 const validPlmEmail = (email) => /^[^\s@]+@plm\.edu\.ph$/i.test(email)
 const validPassword = (password) => /^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(password)
 
+function fail(status, message) {
+  throw Object.assign(new Error(message), { status })
+}
+
+function normalizeItemImage(item) {
+  if (!item?.image || item.image.startsWith("/items/")) return item
+  if (!item.image.startsWith("http")) return item
+  const name = item.name.toLowerCase()
+  let image = "/items/document.svg"
+  if (name.includes("wallet")) image = "/items/wallet.svg"
+  else if (name.includes("laptop")) image = "/items/laptop.svg"
+  else if (name.includes("student id")) image = "/items/student-id.svg"
+  else if (name.includes("flask") || name.includes("bottle")) image = "/items/flask.svg"
+  else if (name.includes("calculator")) image = "/items/calculator.svg"
+  else if (name.includes("pencil")) image = "/items/pencil-case.svg"
+  else if (name.includes("phone") || name.includes("earbud")) image = "/items/phone.svg"
+  else if (item.category === "IDs and Cards") image = "/items/card.svg"
+  return { ...item, image }
+}
+
+function itemForUser(item, user) {
+  if (!item || (item.privacy === "Held" && item.ownerId !== user.id)) return null
+  const normalized = normalizeItemImage(item)
+  if (normalized.ownerId === user.id) return normalized
+  const { answer, privateNotes, originalContent, ...visible } = normalized
+  return visible
+}
+
+function reviewClaim(claim, item, status) {
+  if (!["Approved", "Rejected"].includes(status)) fail(400, "Choose Approved or Rejected.")
+  if (claim.status === status) return
+  if (claim.status !== "Pending" || !["Found", "Pending Claim", "Claimed"].includes(item.status)) fail(409, "This claim is no longer open for review.")
+  if (status === "Approved" && item.status === "Claimed") fail(409, "Another claim has already been approved.")
+  claim.status = status
+  if (status === "Approved") {
+    item.approvedClaimantId = claim.claimantId
+    item.status = "Claimed"
+  } else if (item.status !== "Claimed") {
+    item.status = db.claims.some((entry) => entry.itemId === item.id && entry.status === "Pending") ? "Pending Claim" : "Found"
+  }
+  addNotification(claim.claimantId, "claim", `Claim ${status.toLowerCase()}`, `Your claim for ${item.name} was ${status.toLowerCase()}.`, "activity")
+}
+
+function completeReturn(item) {
+  if (item.status === "Returned") return
+  if (item.status !== "Claimed" || !item.approvedClaimantId) fail(409, "Approve an ownership claim before recording the handover.")
+  item.returnClaimSnapshot = Object.fromEntries(db.claims.filter((entry) => entry.itemId === item.id).map((entry) => [entry.id, entry.status]))
+  item.status = "Returned"
+  addNotification(item.ownerId, "return", "Item successfully returned", `${item.name} was marked as returned.`, "activity")
+  addNotification(item.approvedClaimantId, "return", "Handover completed", `${item.name} was marked as returned to you.`, "activity")
+  for (const claim of db.claims.filter((entry) => entry.itemId === item.id && entry.claimantId !== item.approvedClaimantId && entry.status !== "Rejected")) {
+    claim.status = "Returned to another claimant"
+    addNotification(claim.claimantId, "return", "Item returned to another claimant", "This item was returned to another claimant.", "activity")
+  }
+}
+
+const nextItemId = () => db.items.reduce((next, item) => Math.max(next, item.id + 1), Date.now())
+const nextConversationId = () => db.conversations.reduce((next, thread) => Math.max(next, thread.id + 1), Date.now())
+const nextMessageId = (thread) => Math.max(Date.now(), (thread.messages.at(-1)?.id || 0) + 1)
+const isSensitive = (category) => category === "IDs and Cards"
+const openFound = (item) => ["Found", "Pending Claim"].includes(item?.status) && item.privacy !== "Held"
+
+function matchesFor(lost, found) {
+  return lost?.status === "Lost" && lost.privacy !== "Held" && openFound(found) &&
+    lost.category === found.category && lost.ownerId !== found.ownerId && Boolean(userById(lost.ownerId))
+}
+
+async function handleAdmin(req, res, route, method, user) {
+  if (method === "GET" && route === "/api/admin/overview") {
+    const users = db.users.filter((entry) => entry.emailVerified).map((entry) => ({
+      id: entry.id, name: entry.name, email: entry.email, studentNumber: entry.studentNumber, staffId: entry.staffId,
+      role: entry.id === user.id ? "Admin" : entry.accountType,
+    }))
+    const lostItems = db.items.filter((item) => item.status === "Lost")
+    const foundItems = db.items.filter(openFound)
+    const linked = new Set(db.matches.map((entry) => `${entry.lostId}:${entry.foundId}`))
+    const matches = [
+      ...lostItems.flatMap((lost) => foundItems.filter((found) => matchesFor(lost, found) && !linked.has(`${lost.id}:${found.id}`)).map((found) => ({
+        lostId: lost.id, foundId: found.id, linked: false,
+      }))),
+      ...db.matches.map(({ lostId, foundId }) => ({ lostId, foundId, linked: true })),
+    ]
+    return send(res, 200, {
+      users, items: db.items.map(normalizeItemImage), claims: db.claims, desks: db.desks, matches,
+      notifications: db.notifications.filter((entry) => entry.userId === user.id),
+      claimThreads: db.conversations.filter((entry) => entry.adminClaimId && entry.participantIds.includes(user.id)).map((entry) => ({
+        claimId: entry.adminClaimId,
+        messages: entry.messages.map((message) => ({
+          id: message.id, text: message.text, time: message.time, mine: message.senderId === user.id,
+        })),
+      })),
+      stats: {
+        items: db.items.length,
+        pendingClaims: db.claims.filter((claim) => claim.status === "Pending").length,
+        returnedItems: db.presentationSeed ? 142 : db.items.filter((item) => item.status === "Returned").length,
+        inCustody: db.presentationSeed ? 14 : db.items.filter((item) => item.custodyDeskId && item.status !== "Returned").length,
+        activeReports: db.presentationSeed ? 38 : db.items.filter((item) => item.status !== "Returned" && item.privacy !== "Held").length,
+        returnRate: db.presentationSeed ? 92 : 0,
+        analytics: db.presentationSeed ? [
+          { location: "University Library", reports: 48, returned: 45 },
+          { location: "Gusaling Villegas (GV)", reports: 39, returned: 35 },
+          { location: "University Activity Center", reports: 31, returned: 29 },
+          { location: "Gusaling Katipunan (GK)", reports: 24, returned: 21 },
+          { location: "Gusaling Lacson (GL)", reports: 19, returned: 17 },
+        ] : [],
+      },
+    })
+  }
+
+  if (method === "POST" && route === "/api/admin/items") {
+    const input = await body(req)
+    const desk = db.desks.find((entry) => entry.id === input.deskId && entry.active)
+    if (!desk) fail(400, "Select an active custody desk.")
+    const category = required(input.category, "Category", 50)
+    const item = {
+      id: nextItemId(), name: required(input.name, "Item name", 120), category,
+      location: required(input.location, "Found location", 160), status: "Found",
+      description: required(input.description, "Public description", 1500), image: "",
+      question: required(input.question, "Ownership question", 200),
+      answer: required(input.answer, "Ownership answer", 200).toLowerCase(),
+      privateNotes: clean(input.privateNotes, 1500), shelfTag: clean(input.shelfTag, 120),
+      custodyDeskId: desk.id, privacy: isSensitive(category) ? "Held" : undefined,
+      reporter: user.name, reporterRole: user.accountType, ownerId: user.id, date: displayDate(), createdAt: dateNow(),
+    }
+    db.items.unshift(item)
+    await persist()
+    return send(res, 201, { item })
+  }
+
+  const claimRoute = route.match(/^\/api\/admin\/claims\/(\d+)(\/messages)?$/)
+  if (claimRoute && method === (claimRoute[2] ? "POST" : "PATCH")) {
+    const input = await body(req)
+    const claim = db.claims.find((entry) => entry.id === Number(claimRoute[1]))
+    const item = claim && itemById(claim.itemId)
+    if (!item) fail(404, "Claim not found.")
+    if (claimRoute[2]) {
+      const text = required(input.text, "Message", 2000)
+      if (!userById(claim.claimantId) || claim.claimantId === user.id) fail(409, "The claimant cannot receive messages.")
+      let thread = db.conversations.find((entry) => entry.adminClaimId === claim.id && entry.participantIds.includes(user.id))
+      if (!thread) {
+        thread = { id: nextConversationId(), itemId: item.id, adminClaimId: claim.id, participantIds: [user.id, claim.claimantId], messages: [] }
+        db.conversations.unshift(thread)
+      }
+      thread.messages.push({ id: nextMessageId(thread), senderId: user.id, text, time: "Just now", readBy: [user.id] })
+      addNotification(claim.claimantId, "message", "Message from the OSDS desk", `The OSDS desk sent you a message about ${item.name}.`, "chat")
+    } else {
+      reviewClaim(claim, item, input.status)
+    }
+    await persist()
+    return send(res, 200, { claim, item })
+  }
+
+  const itemRoute = route.match(/^\/api\/admin\/items\/(\d+)\/(status|custody|privacy)$/)
+  if (method === "PATCH" && itemRoute) {
+    const input = await body(req)
+    const item = itemById(Number(itemRoute[1]))
+    if (!item) fail(404, "Item not found.")
+    if (itemRoute[2] === "status") {
+      if (input.status !== "Returned") fail(400, "Choose Returned to record a handover.")
+      completeReturn(item)
+    } else if (itemRoute[2] === "custody") {
+      if (item.status === "Returned" || item.status === "Lost") fail(409, "Only recovered items awaiting release can change custody.")
+      const desk = db.desks.find((entry) => entry.id === input.deskId && entry.active)
+      if (input.deskId !== null && !desk) fail(400, "Select an active desk or With Finder.")
+      item.custodyDeskId = desk?.id
+      item.shelfTag = desk ? clean(input.shelfTag, 120) : undefined
+    } else if (input.action === "hold") {
+      item.privacy = "Held"
+    } else if (input.action === "publish") {
+      if (item.privacy !== "Held") fail(409, "Only held reports can be published from privacy review.")
+      const name = required(input.name, "Redacted title", 120)
+      const description = required(input.description, "Redacted description", 1500)
+      const question = item.question ? required(input.question, "Public ownership question", 200) : undefined
+      item.originalContent ||= { name: item.name, description: item.description, image: item.image, question: item.question }
+      Object.assign(item, { name, description, question, image: "", privacy: "Published" })
+    } else {
+      fail(400, "Choose hold or publish.")
+    }
+    await persist()
+    return send(res, 200, { item })
+  }
+
+  if (method === "POST" && route === "/api/admin/matches") {
+    const { lostId, foundId } = await body(req)
+    const lost = itemById(Number(lostId))
+    const found = itemById(Number(foundId))
+    if (!db.matches.some((entry) => entry.lostId === Number(lostId) && entry.foundId === Number(foundId))) {
+      if (!matchesFor(lost, found)) fail(409, "These reports are no longer eligible for a match.")
+      db.matches.push({ lostId: lost.id, foundId: found.id, linkedAt: dateNow(), linkedBy: user.id })
+      addNotification(lost.ownerId, "match", "Possible match found", `The OSDS desk identified ${found.name} in Browse as a possible match for ${lost.name}.`, "browse")
+      await persist()
+    }
+    return send(res, 200, { ok: true })
+  }
+
+  const deskRoute = route.match(/^\/api\/admin\/desks\/([a-z]+)$/)
+  if (method === "PATCH" && deskRoute) {
+    const input = await body(req)
+    const desk = db.desks.find((entry) => entry.id === deskRoute[1])
+    if (!desk) fail(404, "Custody desk not found.")
+    if (typeof input.active !== "boolean") fail(400, "Supply an active or paused state.")
+    desk.active = input.active
+    await persist()
+    return send(res, 200, { desk })
+  }
+  return send(res, 404, { error: "Admin endpoint not found." })
+}
+
 async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`)
   const route = url.pathname.replace(/\/+$/, "") || "/"
@@ -202,7 +458,7 @@ async function handler(req, res) {
       if (!validPassword(password)) throw Object.assign(new Error("Password must be 8+ characters and include an uppercase letter, a number, and a special character."), { status: 400 })
       if (db.users.some((user) => user.email === email)) throw Object.assign(new Error("An account with this email already exists."), { status: 409 })
       if (!preverifiedEmails.has(email) || preverifiedEmails.get(email) < Date.now()) throw Object.assign(new Error("Verify your email before submitting your details."), { status: 403 })
-      const accountType = external ? "External User" : input.role === "staff" ? "PLM Staff" : "PLM Student"
+      const accountType = external ? "External User" : input.role === "staff" ? "PLM Staff" : "PLM Resident"
       const user = {
         id: id("u_"), name: required(input.name, "Full name", 100), email,
         accountType, role: accountType, phone: clean(input.phone, 30),
@@ -262,6 +518,50 @@ async function handler(req, res) {
       return send(res, 200, { message: "A new verification code was sent.", ...delivery })
     }
 
+    if (method === "POST" && route === "/api/auth/supabase-session") {
+      const input = await body(req)
+      if (!supabasePublicKey || !supabaseServiceRoleKey) fail(503, "Supabase sign-in is not configured on the backend.")
+      const accessToken = required(input.accessToken, "Supabase access token", 16_000)
+      const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/user`, {
+        headers: { apikey: supabasePublicKey, Authorization: `Bearer ${accessToken}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => fail(502, "Could not reach Supabase Auth."))
+      if (response.status === 401 || response.status === 403) fail(401, "Supabase could not verify this sign-in.")
+      if (!response.ok) fail(502, "Supabase Auth could not verify the session.")
+      const identity = await response.json()
+      const email = identity.email?.toLowerCase()
+      if (!identity.id || !email || !identity.email_confirmed_at) fail(403, "Confirm your Supabase email before signing in.")
+      const profile = await supabaseProfile(identity.id)
+      let user = db.users.find((entry) => entry.supabaseAuthId === identity.id)
+      if (!user) {
+        user = db.users.find((entry) => entry.email === email)
+        if (user?.supabaseAuthId && user.supabaseAuthId !== identity.id) {
+          fail(409, "This email is assigned to a different Supabase account. Delete that Auth user and try again.")
+        }
+        if (!user) {
+          const name = clean(profile?.full_name, 100) || clean(identity.user_metadata?.full_name, 100) || email.split("@")[0]
+          const accountType = validPlmEmail(email) ? "PLM Resident" : "External User"
+          user = { id: id("u_"), name, email, accountType, role: accountType, emailVerified: true, createdAt: dateNow() }
+          db.users.push(user)
+        }
+        if (identity.user_metadata?.full_name) user.name = clean(identity.user_metadata.full_name, 100)
+        if (identity.user_metadata?.student_number) user.studentNumber = clean(identity.user_metadata.student_number, 40)
+        if (identity.user_metadata?.phone) user.phone = clean(identity.user_metadata.phone, 30)
+        if (identity.user_metadata?.account_type) {
+          const accountType = clean(identity.user_metadata.account_type, 40)
+          user.accountType = accountType === "PLM" || accountType === "PLM Student"
+            ? "PLM Resident"
+            : accountType
+        }
+        user.supabaseAuthId = identity.id
+        await persist()
+      }
+      const session = makeSession(user, identity.id)
+      session.user.role = profile?.is_admin === true ? "Admin" : user.accountType
+      return send(res, 200, session)
+    }
+
     if (method === "POST" && route === "/api/auth/login") {
       const input = await body(req)
       const email = required(input.email, "Email", 254).toLowerCase()
@@ -294,7 +594,7 @@ async function handler(req, res) {
       if (!resetVerifiedEmails.has(email) || resetVerifiedEmails.get(email) < Date.now()) throw Object.assign(new Error("Verify the reset code before choosing a new password."), { status: 403 })
       user.passwordHash = await passwordHash(password)
       resetVerifiedEmails.delete(email)
-      for (const [token, userId] of sessions) if (userId === user.id) sessions.delete(token)
+      for (const [token, session] of sessions) if (session.userId === user.id) sessions.delete(token)
       await persist()
       return send(res, 200, { message: "Password updated." })
     }
@@ -318,13 +618,11 @@ async function handler(req, res) {
 
     if (method === "GET" && route === "/api/bootstrap") {
       const user = requireUser(req)
+      const admin = await isAdmin(req)
       return send(res, 200, {
-        user: publicUser(user),
-        items: [...db.items].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((item) => {
-          if (item.ownerId === user.id) return item
-          const { answer, ...publicItem } = item
-          return publicItem
-        }),
+        isAdmin: admin,
+        user: { ...publicUser(user), role: admin ? "Admin" : user.accountType },
+        items: [...db.items].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((item) => itemForUser(item, user)).filter(Boolean),
         claims: db.claims.filter((claim) => claim.claimantId === user.id || itemById(claim.itemId)?.ownerId === user.id),
         conversations: db.conversations.filter((conversation) => conversation.participantIds.includes(user.id)).map((conversation) => ({
           id: conversation.id, itemId: conversation.itemId,
@@ -339,12 +637,13 @@ async function handler(req, res) {
     const user = currentUser(req)
     if (!user) throw Object.assign(new Error("Sign in to continue."), { status: 401 })
 
+    if (route.startsWith("/api/admin/")) {
+      await requireAdmin(req)
+      return await handleAdmin(req, res, route, method, user)
+    }
+
     if (method === "GET" && route === "/api/items") return send(res, 200, {
-      items: db.items.map((item) => {
-        if (item.ownerId === user.id) return item
-        const { answer, ...publicItem } = item
-        return publicItem
-      }),
+      items: db.items.map((item) => itemForUser(item, user)).filter(Boolean),
     })
 
     if (method === "POST" && route === "/api/items") {
@@ -353,7 +652,7 @@ async function handler(req, res) {
       const image = clean(input.image, maxBodyBytes)
       if (image && !/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(image) && !/^https:\/\/images\.unsplash\.com\//.test(image)) throw Object.assign(new Error("Upload a PNG, JPEG, WebP, or GIF image."), { status: 400 })
       const item = {
-        id: Date.now(), name: required(input.name, "Item name", 120), category: required(input.category, "Category", 50),
+        id: nextItemId(), name: required(input.name, "Item name", 120), category: required(input.category, "Category", 50),
         status, date: clean(input.date, 20) || displayDate(), createdAt: dateNow(), location: required(input.location, "Location", 160),
         description: required(input.description, "Description", 1500), image,
         reporter: user.name, reporterRole: user.accountType, ownerId: user.id, mine: true,
@@ -363,6 +662,7 @@ async function handler(req, res) {
         rewardAmount: status === "Lost" ? clean(input.rewardAmount, 40) : undefined,
         rewardDescription: status === "Lost" ? clean(input.rewardDescription, 200) : undefined,
       }
+      if (isSensitive(item.category)) item.privacy = "Held"
       db.items.unshift(item)
       await persist()
       return send(res, 201, { item })
@@ -372,7 +672,7 @@ async function handler(req, res) {
     if (method === "POST" && questionMatch) {
       const input = await body(req)
       const item = itemById(Number(questionMatch[1]))
-      if (!item || !["Found", "Pending Claim"].includes(item.status)) throw Object.assign(new Error("This found item is no longer available to claim."), { status: 404 })
+      if (!openFound(item)) throw Object.assign(new Error("This found item is no longer available to claim."), { status: 404 })
       if (item.ownerId === user.id) throw Object.assign(new Error("You cannot claim your own report."), { status: 400 })
       const key = `${user.id}:${item.id}`
       const attempts = answerAttempts.get(key) || 0
@@ -385,10 +685,10 @@ async function handler(req, res) {
     if (method === "POST" && route === "/api/conversations") {
       const input = await body(req)
       const item = itemById(Number(input.itemId))
-      if (!item) throw Object.assign(new Error("Item not found."), { status: 404 })
+      if (!itemForUser(item, user)) fail(404, "Item not found.")
       if (item.ownerId === user.id) throw Object.assign(new Error("You cannot message yourself."), { status: 400 })
-      const existing = db.conversations.find((entry) => entry.itemId === item.id && entry.participantIds.includes(user.id))
-      const conversation = existing || { id: Date.now(), itemId: item.id, participantIds: [item.ownerId, user.id], messages: [] }
+      const existing = db.conversations.find((entry) => !entry.adminClaimId && entry.itemId === item.id && entry.participantIds.includes(user.id))
+      const conversation = existing || { id: nextConversationId(), itemId: item.id, participantIds: [item.ownerId, user.id], messages: [] }
       if (!existing) db.conversations.unshift(conversation)
       await persist()
       return send(res, 201, { conversation: {
@@ -401,21 +701,21 @@ async function handler(req, res) {
     if (method === "POST" && route === "/api/claims") {
       const input = await body(req)
       const item = itemById(Number(input.itemId))
-      if (!item || !["Found", "Pending Claim"].includes(item.status)) throw Object.assign(new Error("This found item is no longer available to claim."), { status: 404 })
+      if (!openFound(item)) throw Object.assign(new Error("This found item is no longer available to claim."), { status: 404 })
       if (item.ownerId === user.id) throw Object.assign(new Error("You cannot claim your own report."), { status: 400 })
       if (db.claims.some((claim) => claim.itemId === item.id && claim.claimantId === user.id && claim.status === "Pending")) throw Object.assign(new Error("You already have a pending claim for this item."), { status: 409 })
       const answer = clean(input.answer, 200).toLowerCase()
       if (!item.answer || answer !== item.answer) throw Object.assign(new Error("The ownership answer does not match."), { status: 403 })
       const claim = {
-        id: Date.now(), itemId: item.id, claimant: user.name, claimantId: user.id, accountType: user.accountType,
+        id: Math.max(Date.now(), (db.claims[0]?.id || 0) + 1), itemId: item.id, claimant: user.name, claimantId: user.id, accountType: user.accountType,
         status: "Pending", requested: "Just now", createdAt: dateNow(), verified: true,
         explanation: required(input.explanation, "Ownership details", 1200), proof: clean(input.proof, maxBodyBytes),
       }
       db.claims.unshift(claim)
       item.status = "Pending Claim"
-      let conversation = db.conversations.find((entry) => entry.itemId === item.id && entry.participantIds.includes(user.id))
+      let conversation = db.conversations.find((entry) => !entry.adminClaimId && entry.itemId === item.id && entry.participantIds.includes(user.id))
       if (!conversation) {
-        conversation = { id: Date.now(), itemId: item.id, participantIds: [item.ownerId, user.id], messages: [] }
+        conversation = { id: nextConversationId(), itemId: item.id, participantIds: [item.ownerId, user.id], messages: [] }
         db.conversations.unshift(conversation)
       }
       addNotification(item.ownerId, "claim", "New claim request", `${user.name} submitted a claim for ${item.name}.`, "activity")
@@ -430,12 +730,7 @@ async function handler(req, res) {
       const item = claim && itemById(claim.itemId)
       if (!claim || !item) throw Object.assign(new Error("Claim not found."), { status: 404 })
       if (item.ownerId !== user.id) throw Object.assign(new Error("Only the item reporter can review this claim."), { status: 403 })
-      if (!(["Approved", "Rejected"].includes(input.status))) throw Object.assign(new Error("Choose Approved or Rejected."), { status: 400 })
-      claim.status = input.status
-      if (input.status === "Approved") item.approvedClaimantId = claim.claimantId
-      else if (item.approvedClaimantId === claim.claimantId) delete item.approvedClaimantId
-      item.status = input.status === "Approved" ? "Claimed" : db.claims.some((entry) => entry.itemId === item.id && entry.id !== claim.id && entry.status === "Pending") ? "Pending Claim" : "Found"
-      addNotification(claim.claimantId, "claim", `Claim ${input.status.toLowerCase()}`, `Your claim for ${item.name} was ${input.status.toLowerCase()}.`, "activity")
+      reviewClaim(claim, item, input.status)
       await persist()
       return send(res, 200, { claim, item })
     }
@@ -445,13 +740,7 @@ async function handler(req, res) {
       const item = itemById(Number(returnedMatch[1]))
       if (!item) throw Object.assign(new Error("Item not found."), { status: 404 })
       if (item.ownerId !== user.id || item.status !== "Claimed") throw Object.assign(new Error("Only the reporter can mark an approved claim as returned."), { status: 403 })
-      item.status = "Returned"
-      item.returnClaimSnapshot = Object.fromEntries(db.claims.filter((entry) => entry.itemId === item.id).map((entry) => [entry.id, entry.status]))
-      addNotification(item.ownerId, "return", "Item successfully returned", `${item.name} was marked as returned.`, "activity")
-      for (const claim of db.claims.filter((entry) => entry.itemId === item.id && entry.claimantId !== item.approvedClaimantId && entry.status !== "Rejected")) {
-        claim.status = "Returned to another claimant"
-        addNotification(claim.claimantId, "return", "Item returned to another claimant", "This item was returned to another claimant.", "activity")
-      }
+      completeReturn(item)
       await persist()
       return send(res, 200, { item })
     }
@@ -462,7 +751,7 @@ async function handler(req, res) {
       if (!item || item.ownerId !== user.id || item.status !== "Returned") throw Object.assign(new Error("Only the finder can undo a return for their returned item."), { status: 403 })
       for (const claim of db.claims.filter((entry) => entry.itemId === item.id)) {
         const previous = item.returnClaimSnapshot?.[claim.id]
-        if (previous) claim.status = previous
+        if (previous) claim.status = previous === "Approved" ? "Pending" : previous
       }
       delete item.returnClaimSnapshot
       delete item.approvedClaimantId
@@ -489,7 +778,7 @@ async function handler(req, res) {
       const conversation = db.conversations.find((entry) => entry.id === Number(messageMatch[1]) && entry.participantIds.includes(user.id))
       if (!conversation) throw Object.assign(new Error("Conversation not found."), { status: 404 })
       const text = required(input.text, "Message", 2000)
-      const message = { id: Date.now(), senderId: user.id, text, time: "Just now", readBy: [user.id] }
+      const message = { id: nextMessageId(conversation), senderId: user.id, text, time: "Just now", readBy: [user.id] }
       conversation.messages.push(message)
       const recipientId = conversation.participantIds.find((participant) => participant !== user.id)
       if (recipientId) addNotification(recipientId, "message", "New message", `${user.name} sent you a message.`, "chat")
@@ -528,7 +817,7 @@ async function handler(req, res) {
       if (nextPassword === input.currentPassword) throw Object.assign(new Error("Choose a password you have not used before."), { status: 400 })
       user.passwordHash = await passwordHash(nextPassword)
       const token = req.headers.authorization?.replace(/^Bearer\s+/i, "")
-      for (const [sessionToken, userId] of sessions) if (userId === user.id && sessionToken !== token) sessions.delete(sessionToken)
+      for (const [sessionToken, session] of sessions) if (session.userId === user.id && sessionToken !== token) sessions.delete(sessionToken)
       await persist()
       return send(res, 200, { message: "Password updated." })
     }

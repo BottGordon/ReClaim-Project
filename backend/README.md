@@ -13,6 +13,14 @@ npm run dev
 
 The API listens on `127.0.0.1:3001`; Vite proxies `/api` requests to it.
 
+## Admin Console
+
+The web sign-in form authenticates with Supabase Auth. Configure `VITE_SUPABASE_URL` and the project's public `VITE_SUPABASE_PUBLISHABLE_KEY` (or `VITE_SUPABASE_ANON_KEY`). The backend verifies the Auth access token, checks `profiles.is_admin` by Auth user ID, and issues a ReClaim session for the existing record APIs. Set `SUPABASE_SERVICE_ROLE_KEY` only in the backend environment. Apply the Supabase migrations so client profile updates cannot edit admin permissions.
+
+Accounts created only through the legacy local registration flow need a verified Supabase Auth account with the same email before they can use web sign-in. Existing ReClaim records are linked on the first verified Supabase sign-in.
+
+The console and student workspace share the Node API's record store. Claim decisions, custody changes, privacy publication, match links, and desk settings persist there. Any reports or claims already stored only in Supabase require a separate data migration. New IDs and Cards reports are held for privacy review until an administrator publishes redacted text.
+
 ## PLM Outlook email delivery
 
 PLM registration requires an `@plm.edu.ph` address. External User registration accepts other email domains. Both registration and password reset use a one-time code sent to the address on the account. To send real mail, copy `.env.example` to `.env` and configure the Microsoft Graph values:

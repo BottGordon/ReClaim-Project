@@ -1,3 +1,4 @@
+import { AdminConsole } from "./AdminConsole"
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   ApiClaim,
@@ -31,6 +32,7 @@ import {
 } from "./lib/api"
 import {
   Bell,
+  BarChart3,
   BookOpen,
   Camera,
   Check,
@@ -55,9 +57,11 @@ import {
   Menu,
   MessageCircle,
   PackageCheck,
+  Package,
   Pencil,
   Plus,
   Search,
+  ShieldAlert,
   Send,
   Settings,
   ShieldCheck,
@@ -65,12 +69,13 @@ import {
   Smartphone,
   Upload,
   UserRound,
+  Users,
   WalletCards,
   X,
   XCircle,
 } from "lucide-react"
 
-type Page = "browse" | "report" | "activity" | "chat" | "notifications" | "profile"
+type Page = "browse" | "report" | "activity" | "chat" | "notifications" | "profile" | "admin"
 type ItemStatus = "Lost" | "Found" | "Pending Claim" | "Claimed" | "Returned"
 type ClaimStatus = "Pending" | "Approved" | "Rejected" | "Returned to another claimant"
 type RewardType = "none" | "money" | "other"
@@ -80,7 +85,7 @@ type DemoUser = {
   id: string
   name: string
   initials: string
-  accountType: "PLM Student" | "PLM Staff" | "External User"
+  accountType: "PLM Resident" | "PLM Student" | "PLM Staff" | "External User"
   email: string
   studentNumber?: string
   staffId?: string
@@ -91,6 +96,17 @@ type DemoUser = {
   phone?: string
   photo?: string
   role: string
+}
+
+function displayAccountType(accountType: string) {
+  if (accountType === "PLM" || accountType === "PLM Student" || accountType === "PLM Resident") return "PLM Resident"
+  return accountType
+}
+
+function verifiedAccountLabel(accountType: string) {
+  if (accountType === "PLM" || accountType === "PLM Student" || accountType === "PLM Resident") return "Verified PLM Resident"
+  if (accountType === "PLM Staff") return "Verified PLM Staff"
+  return `Verified ${accountType}`
 }
 
 type Item = {
@@ -238,21 +254,25 @@ const plmColleges = [
 ]
 
 const photos = {
-  wallet:
-    "https://images.unsplash.com/photo-1579014134953-1580d7f123f3?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
-  tech: "https://images.unsplash.com/photo-1498049794561-7780e7231661?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
-  laptop:
-    "https://images.unsplash.com/photo-1589979034086-5885b60c8f59?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
-  phone:
-    "https://images.unsplash.com/photo-1542351967-d5ae722fed71?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
-  calculator:
-    "https://images.unsplash.com/photo-1516201580490-33550d32de5c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
-  books:
-    "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?auto=format&fit=crop&w=1200&q=80",
-  keys: "https://images.unsplash.com/photo-1582139329536-e7284fece509?auto=format&fit=crop&w=1200&q=80",
-  id: "https://images.unsplash.com/photo-1606761568499-6d2451b23c66?auto=format&fit=crop&w=1200&q=80",
-  umbrella:
-    "https://images.unsplash.com/photo-1551492625-0ad059e5f5e5?auto=format&fit=crop&w=1200&q=80",
+  wallet: "/items/wallet.svg",
+  tech: "/items/phone.svg",
+  laptop: "/items/laptop.svg",
+  phone: "/items/phone.svg",
+  calculator: "/items/calculator.svg",
+  books: "/items/document.svg",
+  keys: "/items/wallet.svg",
+  id: "/items/student-id.svg",
+  umbrella: "/items/flask.svg",
+}
+
+function itemImageSource(source: string) {
+  const illustration = /^\/items\/(calculator|card|document|flask|laptop|pencil-case|phone|student-id|wallet)\.svg$/.exec(source)
+  return illustration ? `${import.meta.env.BASE_URL}items/${illustration[1]}.jpg` : source
+}
+
+function replaceBrokenItemImage(image: HTMLImageElement, item: ApiItem) {
+  const source = itemImageSource(/\bcalculator\b/i.test(item.name) ? photos.calculator : photos.books)
+  if (image.getAttribute("src") !== source) image.src = source
 }
 
 const initialItems: Item[] = [
@@ -824,7 +844,7 @@ function AboutPage({ onNavigate }: { onNavigate: (view: AuthView) => void }) {
   )
 }
 
-function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
+function Auth({ onLogin }: { onLogin: () => Promise<void> }) {
   const [view, setView] = useState<AuthView>("home")
   const [showPassword, setShowPassword] = useState(false)
   const [accountKind, setAccountKind] = useState<"plm" | "external" | null>(null)
@@ -833,14 +853,13 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   const [error, setError] = useState("")
   const [verificationEmail, setVerificationEmail] = useState("")
   const [verificationCode, setVerificationCode] = useState("")
-  const [demoCode, setDemoCode] = useState("")
   const [busy, setBusy] = useState(false)
   const [successMessage, setSuccessMessage] = useState("")
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const email = String(form.get("email") || "")
+    const email = String(form.get("email") || "").trim()
     const password = String(form.get("password") || "")
     const remember = form.get("remember") === "on"
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -849,7 +868,10 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
     }
     setBusy(true)
     setError("")
-    try { onLogin(await login(email, password, remember)) }
+    try {
+      await login(email, password, remember)
+      await onLogin()
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Sign in failed.") }
     finally { setBusy(false) }
   }
@@ -866,7 +888,6 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
     try {
       const result = await startRegistration(email)
       setVerificationEmail(email)
-      setDemoCode(result.demoCode || "")
       setVerificationCode("")
       setView("verify")
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send the verification code.") }
@@ -894,7 +915,7 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
       setVerificationEmail(values.email.trim().toLowerCase())
       setError("")
       setView("login")
-      window.alert("Your PLM account is ready. Sign in with your PLM email and password.")
+      window.alert("Your PLM resident account is ready. Sign in with your PLM resident email and password.")
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Account creation failed.") }
     finally { setBusy(false) }
   }
@@ -912,11 +933,9 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
     finally { setBusy(false) }
   }
 
-  if (view === "signup") return <SignupFlow onDone={(email) => {
+  if (view === "signup") return <SignupFlow onDone={async (email) => {
     if (!email) { setSuccessMessage(""); setView("login"); return }
-    setVerificationEmail(email)
-    setSuccessMessage("Your account is ready. Sign in with your registered email and password.")
-    setView("login")
+    await onLogin()
   }} />
 
   if (view === "home") {
@@ -948,10 +967,8 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
               Verify your email
             </h1>
             <p className="mt-3 text-sm leading-6 text-muted">
-              Enter the 6-digit code for {verificationEmail}. In local demo mode,
-              the generated code is shown below.
+              Enter the 6-digit code sent to {verificationEmail}.
             </p>
-            {demoCode && <p className="form-error mt-4">Local demo code: {demoCode}</p>}
             <div className="mt-7 flex justify-center gap-2">
               {[0, 1, 2, 3, 4, 5].map((number) => (
                 <input
@@ -985,9 +1002,7 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
               onClick={async () => {
                 setError("")
                 try {
-                  const result = await resendVerification(verificationEmail)
-                  setDemoCode(result.demoCode || "")
-                  setVerificationCode(result.demoCode || "")
+                  await resendVerification(verificationEmail)
                 } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") }
               }}
             >
@@ -1005,16 +1020,14 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
       <main className="auth-stage">
         <AuthDecor />
         <div
-          className={`auth-card auth-card-surface ${
-            view === "signup" ? "max-w-[660px]" : "max-w-[470px]"
-          }`}
+          className="auth-card auth-card-surface max-w-[470px]"
         >
           {view === "login" ? (
             <>
               <p className="eyebrow text-center">Good to see you again</p>
               <h1 className="auth-title text-center">Welcome Back!</h1>
               <p className="auth-copy">
-                Sign in with your PLM or External User account.
+                Sign in with your PLM Resident or External User account.
               </p>
               {successMessage && (
                 <div className="form-error mt-4 !border-emerald-200 !bg-emerald-50 !text-emerald-800">
@@ -1111,7 +1124,7 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
                   <div className="mt-8 grid gap-4 sm:grid-cols-2">
                     <AccountCard
                       icon={<IdCard />}
-                      title="PLM Student / Staff"
+                      title="PLM Resident / Staff"
                       text="Use your verified university credentials."
                       onClick={() => setAccountKind("plm")}
                     />
@@ -1176,7 +1189,7 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
                     <Field
                       label={
                         accountKind === "plm"
-                          ? "Official PLM email"
+                          ? "Official PLM resident email"
                           : "Gmail address"
                       }
                       name="email"
@@ -1287,14 +1300,13 @@ function Auth({ onLogin }: { onLogin: (user: ApiUser) => void }) {
   )
 }
 
-function SignupFlow({ onDone }: { onDone: (email: string) => void }) {
+function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void> }) {
   const [stage, setStage] = useState<"choose" | "email" | "otp" | "details">("choose")
   const [accountKind, setAccountKind] = useState<"plm" | "external">("plm")
   const [email, setEmail] = useState("")
   const [code, setCode] = useState("")
   const [role, setRole] = useState<"student" | "staff">("student")
   const [showPassword, setShowPassword] = useState(false)
-  const [demoCode, setDemoCode] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const [details, setDetails] = useState({ name: "", studentNumber: "", phone: "", school: "", password: "", confirm: "" })
@@ -1308,8 +1320,8 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void }) {
     if (!external && !/^[^\s@]+@plm\.edu\.ph$/.test(normalized)) { setError("Use your official @plm.edu.ph email."); return }
     setBusy(true); setError("")
     try {
-      const result = await startRegistration(normalized, external ? "External User" : "PLM")
-      setEmail(normalized); setDemoCode(result.demoCode || ""); setCode(""); setStage("otp")
+      await startRegistration(normalized, external ? "External User" : "PLM")
+      setEmail(normalized); setCode(""); setStage("otp")
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send the code.") }
     finally { setBusy(false) }
   }
@@ -1328,7 +1340,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void }) {
     setBusy(true)
     try {
       await register({ ...details, email, accountType: external ? "External User" : "PLM", role, idNumber: details.studentNumber, phone: details.phone })
-      onDone(email)
+      await onDone(email)
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create your account.") }
     finally { setBusy(false) }
   }
@@ -1343,10 +1355,10 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void }) {
 
   return <div className="auth-page"><PublicNav view="signup" onNavigate={() => {}} /><main className="auth-stage"><AuthDecor /><div className="auth-card auth-card-surface max-w-[600px]">
     <button className="back-link" onClick={goBack}><ChevronLeft size={16} /> Back</button>
-    {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Student / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
-    {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
-    {stage === "otp" && <><p className="eyebrow mt-5">Email verification</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Check your inbox.</h1><form className="mt-6 space-y-5" onSubmit={checkCode}><p className="auth-copy">Enter the six-digit code sent to <b>{email}</b>.</p>{demoCode && <p className="form-error">Local development code: {demoCode}</p>}<label className="field-label" htmlFor="signup-otp">One-time password</label><input className="plain-input w-full text-center tracking-[0.35em]" id="signup-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify email"}<ChevronRight size={16} /></button><button type="button" className="text-button" disabled={busy} onClick={async () => { setError(""); try { const result = await startRegistration(email, external ? "External User" : "PLM"); setDemoCode(result.demoCode || ""); setCode("") } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") } }}>Resend code</button></form></>}
-    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
+    {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Resident / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
+    {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM resident account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM resident email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
+    {stage === "otp" && <><p className="eyebrow mt-5">Email verification</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Check your inbox.</h1><form className="mt-6 space-y-5" onSubmit={checkCode}><p className="auth-copy">Enter the six-digit code sent to <b>{email}</b>.</p><label className="field-label" htmlFor="signup-otp">One-time password</label><input className="plain-input w-full text-center tracking-[0.35em]" id="signup-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify email"}<ChevronRight size={16} /></button><button type="button" className="text-button" disabled={busy} onClick={async () => { setError(""); try { await resendVerification(email); setCode("") } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") } }}>Resend code</button></form></>}
+    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
   </div></main></div>
 }
 function AuthDecor() {
@@ -1376,7 +1388,6 @@ function ForgotPassword({
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [showPassword, setShowPassword] = useState(false)
-  const [demoCode, setDemoCode] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   return (
@@ -1409,9 +1420,8 @@ function ForgotPassword({
                 onClick={async () => {
                   setBusy(true); setError("")
                   try {
-                    const result = await requestPasswordReset(email)
-                    setDemoCode(result.demoCode || "")
-                    setCode(result.demoCode || "")
+                    await requestPasswordReset(email)
+                    setCode("")
                     setStep(2)
                   } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not request a reset code.") }
                   finally { setBusy(false) }
@@ -1424,7 +1434,6 @@ function ForgotPassword({
           {step === 2 && (
             <>
               <p className="auth-copy">Enter the six-digit code sent to {email}. You’ll set a new password after verification.</p>
-              {demoCode && <p className="form-error mt-4">Local demo code: {demoCode}</p>}
               <div className="mt-7 space-y-4">
                 <label className="field-label block" htmlFor="reset-code">Verification code</label>
                 <input id="reset-code" className="plain-input w-full text-center tracking-[0.35em]" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6-digit code" />
@@ -1570,6 +1579,8 @@ function AccountCard({
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<DemoUser | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [restoringSession, setRestoringSession] = useState(true)
   const [page, setPage] = useState<Page>("browse")
   const [items, setItems] = useState<ApiItem[]>([])
   const [claims, setClaims] = useState<ApiClaim[]>([])
@@ -1586,46 +1597,67 @@ export default function App() {
     }
   }
 
-  function applyWorkspace(data: Awaited<ReturnType<typeof bootstrap>>) {
+  function applyWorkspace(data: Awaited<ReturnType<typeof bootstrap>>, routeToHome = false) {
     setCurrentUser(mapUser(data.user))
+    setIsAdmin(data.isAdmin)
+    if (routeToHome || window.location.pathname === "/admin") {
+      const path = data.isAdmin ? "/admin" : "/"
+      if (window.location.pathname !== path) window.history.replaceState(null, "", path)
+      setPage(data.isAdmin ? "admin" : "browse")
+    }
     setItems(data.items.map((item) => ({ ...item, mine: item.ownerId === data.user.id })))
     setClaims(data.claims)
     setConversations(data.conversations)
     setNotifications(data.notifications)
   }
 
-  async function refreshWorkspace() {
+  async function refreshWorkspace(routeToHome = false) {
     const data = await bootstrap()
-    applyWorkspace(data)
+    applyWorkspace(data, routeToHome)
     return data
   }
 
   useEffect(() => {
     let active = true
     void bootstrap().then((data) => {
-      if (active) applyWorkspace(data)
-    }).catch(() => clearSession())
+      if (active) applyWorkspace(data, true)
+    }).catch(() => {
+      if (active) clearSession()
+    }).finally(() => {
+      if (active) setRestoringSession(false)
+    })
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    if (!currentUser) return
+    function syncRoute() {
+      const adminRoute = window.location.pathname === "/admin"
+      if (adminRoute && !isAdmin) window.history.replaceState(null, "", "/")
+      setPage(adminRoute && isAdmin ? "admin" : "browse")
+    }
+    window.addEventListener("popstate", syncRoute)
+    return () => window.removeEventListener("popstate", syncRoute)
+  }, [currentUser, isAdmin])
   function notify(message: string) {
     setToast(message)
     window.setTimeout(() => setToast(""), 2800)
   }
 
   function goTo(nextPage: Page) {
+    if (nextPage === "admin" && !isAdmin) return
+    if (nextPage === "admin" && window.location.pathname !== "/admin") window.history.pushState(null, "", "/admin")
     setPage(nextPage)
     setMobileNav(false)
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
+  if (restoringSession) return <p role="status" className="p-6">Checking your session…</p>
+
   if (!currentUser)
     return (
       <Auth
-        onLogin={async () => {
-          await refreshWorkspace()
-          setPage("browse")
-        }}
+        onLogin={async () => { await refreshWorkspace(true) }}
       />
     )
 
@@ -1636,6 +1668,16 @@ export default function App() {
   const unread = notifications.filter(
     (notification) => notification.unread,
   ).length
+
+  if (isAdmin && page === "admin") {
+    return <AdminConsole user={currentUser} brand={<Logo light />} onSignOut={async () => {
+      await logout()
+      window.history.replaceState(null, "", "/")
+      setCurrentUser(null)
+      setIsAdmin(false)
+      setPage("browse")
+    }} />
+  }
 
   return (
     <div className="app-shell">
@@ -1659,6 +1701,7 @@ export default function App() {
               )}
             </button>
           ))}
+          {isAdmin && <><p className="nav-label mt-8">Administration</p><button className={`nav-item ${page === "admin" ? "active" : ""}`} onClick={() => goTo("admin")}><BarChart3 size={18} /><span>Admin console</span></button></>}
           <p className="nav-label mt-8">Account</p>
           <button
             className={`nav-item ${page === "profile" ? "active" : ""}`}
@@ -1673,7 +1716,7 @@ export default function App() {
             <span className="avatar">{currentUser.initials}</span>
             <span className="min-w-0 text-left">
               <b>{currentUser.name}</b>
-              <small>{currentUser.accountType}</small>
+              <small>{displayAccountType(currentUser.accountType)}</small>
             </span>
           </button>
           <button
@@ -1709,8 +1752,7 @@ export default function App() {
             <span>ReClaim workspace</span>
             <ChevronRight size={13} />
             <b>
-              {navItems.find((item) => item.id === page)?.label ||
-                "Profile & settings"}
+              {navItems.find((item) => item.id === page)?.label || (page === "admin" ? "Admin console" : "Profile & settings")}
             </b>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -1737,7 +1779,7 @@ export default function App() {
         <main className="content">
           {page === "browse" && (
             <Browse
-              items={userItems}
+              items={userItems.filter((item) => item.privacy !== "Held")}
               onSelect={setSelectedItem}
               onReport={() => goTo("report")}
             />
@@ -1747,10 +1789,10 @@ export default function App() {
               onCancel={() => goTo("browse")}
               user={currentUser}
               onSubmit={async (item) => {
-                await createItem(item)
+                const result = await createItem(item)
                 await refreshWorkspace()
-                goTo("browse")
-                notify("Your report is now live in Browse Items.")
+                goTo(result.privacy === "Held" ? "activity" : "browse")
+                notify(result.privacy === "Held" ? "Your report is awaiting a privacy review." : "Your report is now live in Browse Items.")
               }}
             />
           )}
@@ -2016,7 +2058,7 @@ function ItemCard({ item, onClick }: ItemCardProps) {
   return (
     <article className="item-card" onClick={onClick}>
       <div className="item-image">
-        <img src={item.image} alt={item.name} />
+        <img src={itemImageSource(item.image)} alt={item.name} onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
         <StatusBadge status={item.status} />
       </div>
       <div className="item-content">
@@ -2393,7 +2435,7 @@ function ItemModal({
           <X size={20} />
         </button>
         <div className="modal-image">
-          <img src={item.image} alt={item.name} />
+          <img src={itemImageSource(item.image)} alt={item.name} onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
           <StatusBadge status={item.status} />
         </div>
         <div className="modal-body">
@@ -2800,7 +2842,7 @@ function Activity({
             return (
               <article key={itemId} className="claim-review">
                 <div className="claim-header">
-                  <img src={item.image} alt="" />
+                  <img src={itemImageSource(item.image)} alt="" onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
                   <div>
                     <p className="item-category">{item.name}</p>
                     <h3>{item.description}</h3>
@@ -2839,7 +2881,7 @@ function ActivityRow({
 }) {
   return (
     <button className="activity-row" onClick={() => onSelect(item)}>
-      <img src={item.image} alt="" />
+      <img src={itemImageSource(item.image)} alt="" onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
       <div className="min-w-0 flex-1 text-left">
         <div className="flex items-center gap-2">
           <h3>{item.name}</h3>
@@ -2978,7 +3020,7 @@ function Chat({
                 <small>Active now</small>
               </div>
               <button className="related-item">
-                <img src={item.image} alt="" />
+                <img src={itemImageSource(item.image)} alt="" onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
                 <span>
                   <small>Related item</small>
                   <b>{item.name}</b>
@@ -3150,7 +3192,7 @@ function Profile({
           <h2>{user.name}</h2>
           <p>{user.email}</p>
           <span className="verified-chip">
-            <ShieldCheck size={14} /> Verified {user.accountType}
+            <ShieldCheck size={14} /> {verifiedAccountLabel(user.accountType)}
           </span>
           <div className="profile-stats">
             <div>
@@ -3167,10 +3209,10 @@ function Profile({
           </button>
         </aside>
         <section className="settings-card">
-          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : "PLM account details"}</h3><p>These verified details can't be edited here.</p></div></div>
+          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : "PLM resident account details"}</h3><p>These verified details can't be edited here.</p></div></div>
           <div className="settings-fields">
             <ProfileField label="Full name" value={user.name} />
-            <ProfileField label={user.accountType === "External User" ? "Account email" : "Official PLM email"} value={user.email} />
+            <ProfileField label={user.accountType === "External User" ? "Account email" : "Official PLM resident email"} value={user.email} />
             {user.accountType === "External User" ? (
               <ProfileField label="School / University" value={user.school || "Not provided"} />
             ) : (
