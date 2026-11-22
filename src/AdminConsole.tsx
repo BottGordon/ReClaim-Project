@@ -1,5 +1,6 @@
 ﻿import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { BarChart3, Bell, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Package, PackageCheck, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, X } from "lucide-react"
+import { adminDemo } from "./lib/adminDemo"
 import {
   adminLinkMatch, adminLogWalkIn, adminMessageClaimant, adminModerate, adminOverview,
   adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, setNotificationRead,
@@ -46,7 +47,8 @@ type AdminConsoleProps = { user: ApiUser; brand: ReactNode } & (
 
 export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsoleProps) {
   const [view, setView] = useState<View>("dashboard")
-  const [data, setData] = useState<AdminOverview | undefined>(preview)
+  const [liveData, setLiveData] = useState<AdminOverview>()
+  const [demoChoice, setDemoChoice] = useState<boolean>()
   const [busy, setBusy] = useState(!preview)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
@@ -54,18 +56,21 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [filter, setFilter] = useState("All")
   const [selection, setSelection] = useState<Selection>()
   const [showOriginal, setShowOriginal] = useState(false)
+  const showDemo = demoChoice ?? liveData?.claims.length === 0
+  const readOnly = Boolean(preview || showDemo)
+  const data = preview ?? (showDemo ? adminDemo : liveData)
 
   useEffect(() => {
     if (preview) return
     let active = true
-    void adminOverview().then((overview) => { if (active) setData(overview) })
+    void adminOverview().then((overview) => { if (active) setLiveData(overview) })
       .catch((failure) => { if (active) setError(messageFor(failure)) })
       .finally(() => { if (active) setBusy(false) })
     return () => { active = false }
   }, [preview])
 
   async function run(action?: () => Promise<unknown>, success?: string, close = false) {
-    if (preview) return
+    if (readOnly && action) return
     setBusy(true)
     setError("")
     setNotice("")
@@ -73,14 +78,22 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
       if (action) await action()
       if (close) setSelection(undefined)
       if (success) setNotice(success)
-      setData(await adminOverview())
+      setLiveData(await adminOverview())
     } catch (failure) {
       setError(messageFor(failure))
     } finally {
       setBusy(false)
     }
   }
-  const writeDisabled = busy || Boolean(preview)
+  const writeDisabled = busy || readOnly
+
+  function switchDataset() {
+    setDemoChoice(!showDemo)
+    setSelection(undefined)
+    setError("")
+    setNotice("")
+    navigate("dashboard")
+  }
 
   function navigate(next: View) {
     setView(next)
@@ -119,6 +132,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const notifications = data?.notifications ?? []
   const unread = notifications.filter((notification) => notification.unread).length
   const selectedClaim = selection?.type === "claim" ? claims.find((claim) => claim.id === selection.id) : undefined
+  const claimant = selectedClaim?.claimantId ? userById.get(selectedClaim.claimantId) : undefined
   const selectedItem = selectedClaim ? itemById.get(selectedClaim.itemId) : selection?.type === "item" ? itemById.get(selection.id) : undefined
   const original = selectedItem && showOriginal ? selectedItem.originalContent ?? selectedItem : undefined
 
@@ -216,10 +230,14 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           {(["dashboard", "inventory", "custody", "claims", "moderation", "matches"] as View[]).includes(view) && <label className="admin-search"><Search size={15} /><input aria-label="Search records" placeholder="Ticket, item, student no., location" value={query} onChange={(event) => setQuery(event.target.value)} /></label>}
           <button className="admin-icon-action" aria-label={unread + " unread notifications"} onClick={() => inspect({ type: "notifications" })}><Bell size={17} />{unread > 0 && <sup>{unread}</sup>}</button>
           {!preview && <button className="admin-refresh" disabled={busy} onClick={() => void run()}><RefreshCw size={14} /> Refresh</button>}
-          <button className="admin-walkin" disabled={!data || busy} onClick={() => inspect({ type: "walk-in" })}><Plus size={15} /> Log Walk-in Item</button>
+          <button className="admin-walkin" disabled={!data || writeDisabled} onClick={() => inspect({ type: "walk-in" })}><Plus size={15} /> Log Walk-in Item</button>
         </div>
       </div>
       {preview && <p className="admin-feedback"><strong>Read-only preview</strong> · Sample records · <a className="underline" href="/admin">Sign in to manage live records</a></p>}
+      {!preview && liveData && <div className="admin-feedback flex items-center justify-between gap-3">
+        <span>{showDemo ? "Demo dashboard · Sample records · Read only" : "Live dashboard"}</span>
+        <button className="admin-refresh" disabled={busy} onClick={switchDataset}>{showDemo ? "Show live records" : "Show demo dashboard"}</button>
+      </div>}
       {error && !selection && <p className="admin-feedback error" role="alert">{error}</p>}
       {notice && !selection && <p className="admin-feedback" role="status">{notice}</p>}
       {!data && busy && <p role="status" className="admin-empty">Loading admin records…</p>}
@@ -344,7 +362,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                 <p>{selectedItem.location} · {selectedItem.category}</p>
               </div>
               <div className="claim-drawer-tools">
-                <label><span>Custody status</span><select value={selectedItem.custodyDeskId || ""} onChange={(event) => void run(() => adminSetCustody(selectedItem.id, event.target.value || null, selectedItem.shelfTag), "Custody updated.")}>
+                <label><span>Custody status</span><select disabled={writeDisabled} value={selectedItem.custodyDeskId || ""} onChange={(event) => void run(() => adminSetCustody(selectedItem.id, event.target.value || null, selectedItem.shelfTag || ""), "Custody updated.")}>
                   <option value="">With Finder</option>
                   {desks.map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}
                 </select></label>
@@ -364,7 +382,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                 </section>
                 <section className="claim-proof-panel">
                   <div className="claim-panel-heading"><b>Claimant submitted proof</b><span>{selectedClaim.verified ? "96% Match" : "Unverified"}</span></div>
-                  <div className="claimant-card"><div>{selectedClaim.claimant.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div><span><b>{selectedClaim.claimant}{selectedClaim.claimantId && (userById.get(selectedClaim.claimantId)?.studentNumber ? ` (${userById.get(selectedClaim.claimantId)?.studentNumber})` : "")}</b><small>{(() => { const accountType = userById.get(selectedClaim.claimantId)?.accountType || "PLM Student"; return accountType === "PLM" || accountType === "PLM Student" ? "PLM Resident" : accountType })()}</small></span></div>
+                  <div className="claimant-card"><div>{selectedClaim.claimant.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div><span><b>{selectedClaim.claimant}{claimant?.studentNumber ? ` (${claimant.studentNumber})` : ""}</b><small>{["PLM", "PLM Student"].includes(selectedClaim.accountType) ? "PLM Resident" : selectedClaim.accountType}</small></span></div>
                   <div className="claim-answer"><small>Ownership verification</small><p>"{selectedClaim.explanation}"</p></div>
                   {selectedClaim.proof?.startsWith("data:image/") && <img src={selectedClaim.proof} alt="Ownership evidence" />}
                   <footer><span>PLM Student Registry</span><b>✓ Active Enrolled</b></footer>

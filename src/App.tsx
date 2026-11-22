@@ -903,15 +903,13 @@ function Auth({ onLogin }: { onLogin: () => Promise<void> }) {
     setBusy(true)
     setError("")
     try {
-      const result = await register({
+      await register({
         ...values,
         accountType: "plm",
         role,
         idNumber: values.id || "",
         phone: values.contact || "",
       })
-      setVerificationEmail(values.email.trim().toLowerCase())
-      setDemoCode("")
       setVerificationEmail(values.email.trim().toLowerCase())
       setError("")
       setView("login")
