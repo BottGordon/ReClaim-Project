@@ -57,6 +57,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [selection, setSelection] = useState<Selection>()
   const [showOriginal, setShowOriginal] = useState(false)
   const [publishedSamples, setPublishedSamples] = useState<Record<number, Pick<ApiItem, "name" | "description" | "question">>>({})
+  const [sampleCustody, setSampleCustody] = useState<Record<number, Pick<ApiItem, "custodyDeskId" | "shelfTag">>>({})
   const combined = liveData && combineAdminRecords(liveData)
   const data = preview ?? combined?.data
   const isSampleItem = (id: number) => combined?.itemIds.has(id) === true
@@ -104,8 +105,13 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   }
 
   const items = (data?.items ?? []).map((item): ApiItem => {
-    const edits = isSampleItem(item.id) && publishedSamples[item.id]
-    return edits ? { ...item, ...edits, image: "", privacy: "Published" } : item
+    if (!isSampleItem(item.id)) return item
+    const edits = publishedSamples[item.id]
+    return {
+      ...item,
+      ...sampleCustody[item.id],
+      ...(edits && { ...edits, image: "", privacy: "Published" as const }),
+    }
   })
   const claims = data?.claims ?? []
   const desks = data?.desks ?? []
@@ -134,7 +140,21 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const claimant = selectedClaim?.claimantId ? userById.get(selectedClaim.claimantId) : undefined
   const selectedItem = selectedClaim ? itemById.get(selectedClaim.itemId) : selection?.type === "item" ? itemById.get(selection.id) : undefined
   const selectedMessages = data?.claimThreads.find((thread) => thread.claimId === selectedClaim?.id)?.messages ?? []
-  const selectedDesks = desks.filter((desk) => combined?.liveDeskIds.has(desk.id) || desk.id === selectedItem?.custodyDeskId)
+  const selectedDesks = desks.filter((desk) => selectedIsSample || combined?.liveDeskIds.has(desk.id) || desk.id === selectedItem?.custodyDeskId)
+  const canChangeCustody = selectedItem && selectedItem.status !== "Lost" && selectedItem.status !== "Returned"
+
+  function changeCustody(item: ApiItem, deskId: string | null, shelfTag: string) {
+    if (isSampleItem(item.id)) {
+      setSampleCustody((previous) => ({
+        ...previous,
+        [item.id]: { custodyDeskId: deskId ?? undefined, shelfTag: deskId ? shelfTag.trim() : undefined },
+      }))
+      setError("")
+      setNotice("Sample custody updated for this walkthrough.")
+      return
+    }
+    void run(() => adminSetCustody(item.id, deskId, shelfTag), "Custody updated.")
+  }
 
   function publishRedactedReport(item: ApiItem, form: FormData) {
     const edits = {
@@ -387,7 +407,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                 <p>{selectedItem.location} · {selectedItem.category}</p>
               </div>
               <div className="claim-drawer-tools">
-                <label><span>Custody status</span><select disabled={recordWriteDisabled} value={selectedItem.custodyDeskId || ""} onChange={(event) => void run(() => adminSetCustody(selectedItem.id, event.target.value || null, selectedItem.shelfTag || ""), "Custody updated.")}>
+                <label><span>Custody status</span><select disabled={writeDisabled || !canChangeCustody} value={selectedItem.custodyDeskId || ""} onChange={(event) => changeCustody(selectedItem, event.target.value || null, selectedItem.shelfTag || "")}>
                   <option value="">With Finder</option>
                   {selectedDesks.map((desk) => <option key={desk.id} value={desk.id} disabled={!desk.active}>{desk.name}</option>)}
                 </select></label>
@@ -445,8 +465,8 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               <p><b>Reported by</b> {selectedItem.reporter} · {selectedItem.reporterRole}</p>
               {selectedItem.privateNotes && <p><b>Private notes</b> {selectedItem.privateNotes}</p>}
             </section>
-            {!selectedIsSample && selectedItem.status !== "Lost" && selectedItem.status !== "Returned" && <form className="admin-form" onSubmit={submit((form) => void run(() =>
-              adminSetCustody(selectedItem.id, field(form, "deskId") || null, field(form, "shelfTag")), "Custody updated."))}>
+            {canChangeCustody && <form className="admin-form" onSubmit={submit((form) =>
+              changeCustody(selectedItem, field(form, "deskId") || null, field(form, "shelfTag")))}>
               <label>Custody desk<select name="deskId" defaultValue={selectedItem.custodyDeskId || ""}><option value="">With finder</option>
                 {selectedDesks.filter((desk) => desk.active || selectedItem.custodyDeskId === desk.id).map((desk) => <option key={desk.id} value={desk.id} disabled={!desk.active}>{desk.name}{desk.active ? "" : " (paused)"}</option>)}
               </select></label>
