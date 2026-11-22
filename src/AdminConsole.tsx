@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { BarChart3, Bell, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Package, PackageCheck, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, X } from "lucide-react"
-import { adminDemo } from "./lib/adminDemo"
+import { adminDemo, combineAdminRecords } from "./lib/adminDemo"
 import {
   adminLinkMatch, adminLogWalkIn, adminMessageClaimant, adminModerate, adminOverview,
   adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, setNotificationRead,
@@ -48,7 +48,6 @@ type AdminConsoleProps = { user: ApiUser; brand: ReactNode } & (
 export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsoleProps) {
   const [view, setView] = useState<View>("dashboard")
   const [liveData, setLiveData] = useState<AdminOverview>()
-  const [demoChoice, setDemoChoice] = useState<boolean>()
   const [busy, setBusy] = useState(!preview)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
@@ -56,9 +55,11 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [filter, setFilter] = useState("All")
   const [selection, setSelection] = useState<Selection>()
   const [showOriginal, setShowOriginal] = useState(false)
-  const showDemo = demoChoice ?? liveData?.claims.length === 0
-  const readOnly = Boolean(preview || showDemo)
-  const data = preview ?? (showDemo ? adminDemo : liveData)
+  const combined = liveData && combineAdminRecords(liveData)
+  const data = preview ?? combined?.data
+  const isSampleItem = (id: number) => combined?.itemIds.has(id) === true
+  const selectedIsSample = selection?.type === "item" ? isSampleItem(selection.id)
+    : selection?.type === "claim" && combined?.claimIds.has(selection.id) === true
 
   useEffect(() => {
     if (preview) return
@@ -70,7 +71,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   }, [preview])
 
   async function run(action?: () => Promise<unknown>, success?: string, close = false) {
-    if (readOnly && action) return
+    if (action && (preview || selectedIsSample)) return
     setBusy(true)
     setError("")
     setNotice("")
@@ -85,15 +86,8 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
       setBusy(false)
     }
   }
-  const writeDisabled = busy || readOnly
-
-  function switchDataset() {
-    setDemoChoice(!showDemo)
-    setSelection(undefined)
-    setError("")
-    setNotice("")
-    navigate("dashboard")
-  }
+  const writeDisabled = busy || Boolean(preview)
+  const recordWriteDisabled = writeDisabled || selectedIsSample
 
   function navigate(next: View) {
     setView(next)
@@ -134,23 +128,32 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const selectedClaim = selection?.type === "claim" ? claims.find((claim) => claim.id === selection.id) : undefined
   const claimant = selectedClaim?.claimantId ? userById.get(selectedClaim.claimantId) : undefined
   const selectedItem = selectedClaim ? itemById.get(selectedClaim.itemId) : selection?.type === "item" ? itemById.get(selection.id) : undefined
+  const selectedMessages = data?.claimThreads.find((thread) => thread.claimId === selectedClaim?.id)?.messages ?? []
+  const selectedDesks = desks.filter((desk) => combined?.liveDeskIds.has(desk.id) || desk.id === selectedItem?.custodyDeskId)
   const original = selectedItem && showOriginal ? selectedItem.originalContent ?? selectedItem : undefined
 
   const analytics = new Map<string, { reports: number; returned: number }>()
-  for (const item of items) {
+  for (const item of liveData?.items ?? preview?.items ?? []) {
     const stats = analytics.get(item.location) ?? { reports: 0, returned: 0 }
     stats.reports++
     if (item.status === "Returned") stats.returned++
     analytics.set(item.location, stats)
   }
-  const presentationLocations = data?.stats.analytics ?? []
-  const locations = presentationLocations.length
-    ? presentationLocations.map((entry) => [entry.location, { reports: entry.reports, returned: entry.returned }] as [string, { reports: number; returned: number }])
-    : [...analytics].sort(([left], [right]) => left.localeCompare(right))
+  const presentationLocations = data?.stats.analytics.length ? data.stats.analytics : adminDemo.stats.analytics
+  const locations = [
+    ...presentationLocations.map(({ location, reports, returned }) => ({ location, reports, returned, sample: true })),
+    ...[...analytics].sort(([left], [right]) => left.localeCompare(right))
+      .map(([location, stats]) => ({ location, ...stats, sample: false })),
+  ]
+  const liveReturned = [...analytics.values()].reduce((total, entry) => total + entry.returned, 0)
+  const liveReturnRate = liveData?.items.length ? Math.round(100 * liveReturned / liveData.items.length) : 0
 
   function exportAnalytics() {
     const quote = (value: string) => '"' + (/^[\s]*[=+\-@]/.test(value) ? "'" : "") + value.replace(/"/g, '""') + '"'
-    const csv = ["Location,Reports,Reunited", ...locations.map(([location, stats]) => [quote(location), stats.reports, stats.returned].join(","))].join("\r\n")
+    const csv = ["Location,Reports,Reunited,Source",
+      ...[...analytics].map(([location, stats]) => [quote(location), stats.reports, stats.returned, "Live"].join(",")),
+      ...presentationLocations.map((entry) => [quote(entry.location), entry.reports, entry.returned, "Sample"].join(",")),
+    ].join("\r\n")
     const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }))
     const link = document.createElement("a")
     link.href = url
@@ -181,7 +184,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
       <tbody>{rows.map((claim) => {
         const item = itemById.get(claim.itemId)
         return <tr key={claim.id}>
-          <td className="inventory-item"><b>{item?.name}</b><small>{ticket(claim.itemId)}</small></td>
+        <td className="inventory-item"><b>{item?.name}</b><small>{ticket(claim.itemId)}{combined?.claimIds.has(claim.id) && " · Sample"}</small></td>
           <td>{item?.category}</td><td>{item?.location}</td><td>{item && custody(item)}</td>
           <td>{claim.claimant}</td><td>{claim.requested}</td><td>{claim.status}</td>
           <td><button className="inspect-button" onClick={() => inspect({ type: "claim", id: claim.id })}>Review</button></td>
@@ -194,7 +197,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
     return <div className="inventory-table-wrap"><table className="inventory-table">
       <thead><tr><th>Ticket</th><th>Item &amp; category</th><th>Campus location</th><th>Custody</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>{rows.map((item) => <tr key={item.id}>
-        <td><b>{ticket(item.id)}</b></td><td className="inventory-item"><b>{item.name}</b><small>{item.category} · {item.date}</small></td>
+        <td><b>{ticket(item.id)}</b></td><td className="inventory-item"><b>{item.name}</b><small>{item.category} · {item.date}{isSampleItem(item.id) && item.date !== "Sample record" && " · Sample"}</small></td>
         <td>{item.location}</td><td>{custody(item)}{item.shelfTag && item.custodyDeskId && item.status !== "Returned" && <small className="block">{item.shelfTag}</small>}</td>
         <td><span className={"inventory-status " + item.status.toLowerCase().replace(/ /g, "-")}>{displayStatus(item.status)}</span>{item.privacy === "Held" && <small className="block">Held for privacy</small>}</td>
         <td><button className="inspect-button" onClick={() => inspect({ type: "item", id: item.id })}>Inspect</button></td>
@@ -234,10 +237,6 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         </div>
       </div>
       {preview && <p className="admin-feedback"><strong>Read-only preview</strong> · Sample records · <a className="underline" href="/admin">Sign in to manage live records</a></p>}
-      {!preview && liveData && <div className="admin-feedback flex items-center justify-between gap-3">
-        <span>{showDemo ? "Demo dashboard · Sample records · Read only" : "Live dashboard"}</span>
-        <button className="admin-refresh" disabled={busy} onClick={switchDataset}>{showDemo ? "Show live records" : "Show demo dashboard"}</button>
-      </div>}
       {error && !selection && <p className="admin-feedback error" role="alert">{error}</p>}
       {notice && !selection && <p className="admin-feedback" role="status">{notice}</p>}
       {!data && busy && <p role="status" className="admin-empty">Loading admin records…</p>}
@@ -249,9 +248,9 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           </section>
           <section className="admin-dashboard-metrics">
             <button onClick={() => navigate("claims")}><div><span>Pending Claims</span><ShieldCheck size={18} /></div><strong><b>{data.stats.pendingClaims}</b><em>Action Required</em></strong></button>
-            <button onClick={() => navigate("custody")}><div><span>In Physical Custody</span><PackageCheck size={18} /></div><strong><b>{inCustody}</b><em>OSDS &amp; Guard Desks</em></strong></button>
-            <button onClick={() => navigate("inventory")}><div><span>Active Reports</span><Package size={18} /></div><strong><b>{activeReports}</b><em>Public Campus Feed</em></strong></button>
-            <button onClick={() => navigate("analytics")}><div><span>Items Reunited</span><ShieldCheck size={18} /></div><strong><b>{data.stats.returnedItems}</b><em>{data.stats.returnRate}% Return Rate</em></strong></button>
+            <button onClick={() => navigate("custody")}><div><span>In Physical Custody</span><PackageCheck size={18} /></div><strong><b>{adminDemo.stats.inCustody}</b><em>Sample · {inCustody} live</em></strong></button>
+            <button onClick={() => navigate("inventory")}><div><span>Active Reports</span><Package size={18} /></div><strong><b>{adminDemo.stats.activeReports}</b><em>Sample · {activeReports} live</em></strong></button>
+            <button onClick={() => navigate("analytics")}><div><span>Items Reunited</span><ShieldCheck size={18} /></div><strong><b>{adminDemo.stats.returnedItems}</b><em>Sample · {liveReturned} live</em></strong></button>
           </section>
           <div className="admin-heading admin-dashboard-heading"><h2>Claims to Verify</h2><div className="admin-record-actions">
             <button className="admin-refresh" onClick={() => navigate("moderation")}>Needs Privacy Review ({held.length})</button>
@@ -281,7 +280,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
             <header><div><span>{ticket(item.id)}</span><b>Privacy review</b></div><small>{item.date}</small></header>
             <h2>{item.name}</h2><p>{item.location} · Submitted by {item.reporter}</p>
             <div className="admin-privacy-preview"><span>Public feed preview</span><b>{item.category === "IDs and Cards" ? "Student ID / card details" : "Sensitive campus record"}</b><small>{item.description}</small></div>
-            <footer><span>Requires redaction before publishing</span><button className="admin-primary" onClick={() => inspect({ type: "item", id: item.id })}>Review &amp; publish</button></footer>
+            <footer><span>Requires redaction before publishing</span><button className="admin-primary" onClick={() => inspect({ type: "item", id: item.id })}>{isSampleItem(item.id) ? "Inspect sample" : "Review & publish"}</button></footer>
           </article>)}
           {!held.length && <div className="admin-empty-card"><ShieldCheck size={28} /><h2>No reports require privacy review</h2><p>All public reports are currently cleared for release.</p></div>}
         </div>}
@@ -291,7 +290,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
             const found = itemById.get(match.foundId)
             return <article className="admin-match-card" key={match.lostId + ":" + match.foundId}>
               <header><div><span>Potential match</span><p>{found?.category} · Matching item details</p></div>
-                <button className="admin-primary" disabled={writeDisabled || match.linked} onClick={() => void run(() => adminLinkMatch(match.lostId, match.foundId), "Match linked and reporter notified.")}>{match.linked ? "Owner notified" : "Notify owner & link"}</button></header>
+                {isSampleItem(match.lostId) || isSampleItem(match.foundId) ? <small>Sample match</small> : <button className="admin-primary" disabled={writeDisabled || match.linked} onClick={() => void run(() => adminLinkMatch(match.lostId, match.foundId), "Match linked and reporter notified.")}>{match.linked ? "Owner notified" : "Notify owner & link"}</button>}</header>
               <div className="admin-match-columns">
                 <section><div><span>Lost</span><b>{ticket(match.lostId)}</b></div><h3>{lost?.name}</h3><p>{lost?.location}</p><small>Reporter: {lost?.reporter}</small></section>
                 <section><div><span>Found</span><b>{ticket(match.foundId)}</b></div><h3>{found?.name}</h3><p>{found?.location}</p><small>Custody: {found ? custody(found) : "Unknown"}</small></section>
@@ -302,26 +301,27 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         </div>}
         {view === "analytics" && <div className="admin-analytics-grid">
           <section className="admin-chart-card"><header><div><h2>Reports &amp; Verified Returns by Building</h2><p>Comparing total logged items with verified student reunions</p></div><div className="admin-chart-legend"><span><i />Total logged</span><span><i />Reunited</span></div></header>
-            <div className="admin-chart">{locations.map(([location, stats]) => <div className="admin-chart-row" key={location}>
-              <div><b>{location}</b><span>{stats.returned} / {stats.reports} reunited</span></div>
-              <div className="admin-chart-track"><span style={{ width: stats.reports ? `${Math.max(8, stats.returned / stats.reports * 100)}%` : "0%" }} /></div>
+            <div className="admin-chart">{locations.map(({ location, reports, returned, sample }) => <div className="admin-chart-row" key={location + (sample ? "-sample" : "-live")}>
+              <div><b>{location}{sample && " · Sample"}</b><span>{returned} / {reports} reunited</span></div>
+              <div className="admin-chart-track"><span style={{ width: reports ? `${returned / reports * 100}%` : "0%" }} /></div>
             </div>)}</div>
             {!locations.length && <p className="admin-muted">No locations have reports yet.</p>}
           </section>
-          <aside className="admin-summary-card"><span>AY 2025–2026 Summary</span><h2>Verification Performance</h2><div><small>Verified return rate</small><strong>{data.stats.returnRate}%</strong></div><div><small>Median desk turnaround</small><strong>14.2h</strong></div><footer><span>Total reunited</span><b>{data.stats.returnedItems} items</b></footer></aside>
+          <aside className="admin-summary-card"><span>Campus Summary</span><h2>Verification Performance</h2><div><small>Live return rate</small><strong>{liveReturnRate}%</strong></div><div><small>Sample return rate</small><strong>{adminDemo.stats.returnRate}%</strong></div><footer><span>Live items reunited</span><b>{liveReturned}</b></footer></aside>
         </div>}
         {view === "settings" && <div className="admin-settings">
           <section className="admin-card admin-record-list"><h2>Custody Desks</h2>
             {desks.map((desk) => <article key={desk.id}><b>{desk.name}</b>
-              <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminSetDesk(desk.id, !desk.active), desk.active ? "Desk paused." : "Desk activated.")}>{desk.active ? "Pause desk" : "Activate desk"}</button>
+              {combined?.liveDeskIds.has(desk.id) ? <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminSetDesk(desk.id, !desk.active), desk.active ? "Desk paused." : "Desk activated.")}>{desk.active ? "Pause desk" : "Activate desk"}</button> : <small>Sample desk</small>}
             </article>)}
           </section>
           <section className="admin-card admin-record-list"><h2>OSDS &amp; Security Admin Roles</h2>
+            <article><div><b>{user.name}</b><p>{user.email}</p></div><span className="admin-role-badge">Signed-in admin</span></article>
             {[
               ["OSDS Admin Office", "Super Admin • Claim Verification & Release", "osds.reclaim@plm.edu.ph"],
               ["Sgt. R. Dela Cruz", "Campus Security • Walk-in Custody Intake", "security.desk@plm.edu.ph"],
               ["M. L. Dimaculangan", "Student Affairs Coordinator • Privacy Review", "mldimaculangan@plm.edu.ph"],
-            ].map(([name, role, email]) => <article key={email}><div><b>{name}</b><p>{role}</p><p>{email}</p></div><span className="admin-role-badge">Authorized</span></article>)}
+            ].map(([name, role, email]) => <article key={email}><div><b>{name}</b><p>{role}</p></div><span className="admin-role-badge">Sample role</span></article>)}
           </section>
         </div>}
       </>}
@@ -345,26 +345,26 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           <label>Item name<input name="name" required maxLength={120} /></label>
           <label>Category<select name="category" required>{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
           <label>Found location<input name="location" required maxLength={160} /></label>
-          <label>Custody desk<select name="deskId" required><option value="">Select a desk</option>{desks.filter((desk) => desk.active).map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select></label>
+          <label>Custody desk<select name="deskId" required><option value="">Select a desk</option>{desks.filter((desk) => desk.active && combined?.liveDeskIds.has(desk.id)).map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select></label>
           <label>Shelf tag<input name="shelfTag" maxLength={120} /></label>
           <label>Public description<textarea name="description" required maxLength={1500} /></label>
           <label>Ownership question shown to claimants<input name="question" required maxLength={200} /></label>
           <label>Private answer<input name="answer" required maxLength={200} /></label>
           <label>Private notes<textarea name="privateNotes" maxLength={1500} /></label>
-          <button className="btn-primary" disabled={writeDisabled || !desks.some((desk) => desk.active)}>Save item</button>
+          <button className="btn-primary" disabled={writeDisabled || !desks.some((desk) => desk.active && combined?.liveDeskIds.has(desk.id))}>Save item</button>
         </form>}
         {selectedItem && <>
           {selectedClaim ? <div className="claim-drawer">
             <header className="claim-drawer-header">
               <div>
-                <div className="claim-drawer-badges"><b>{ticket(selectedItem.id)}</b><span>{displayStatus(selectedItem.status)}</span></div>
+                <div className="claim-drawer-badges"><b>{ticket(selectedItem.id)}</b><span>{displayStatus(selectedItem.status)}</span>{selectedIsSample && <span>Sample claim</span>}</div>
                 <h2>{selectedItem.name}</h2>
                 <p>{selectedItem.location} · {selectedItem.category}</p>
               </div>
               <div className="claim-drawer-tools">
-                <label><span>Custody status</span><select disabled={writeDisabled} value={selectedItem.custodyDeskId || ""} onChange={(event) => void run(() => adminSetCustody(selectedItem.id, event.target.value || null, selectedItem.shelfTag || ""), "Custody updated.")}>
+                <label><span>Custody status</span><select disabled={recordWriteDisabled} value={selectedItem.custodyDeskId || ""} onChange={(event) => void run(() => adminSetCustody(selectedItem.id, event.target.value || null, selectedItem.shelfTag || ""), "Custody updated.")}>
                   <option value="">With Finder</option>
-                  {desks.map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}
+                  {selectedDesks.map((desk) => <option key={desk.id} value={desk.id} disabled={!desk.active}>{desk.name}</option>)}
                 </select></label>
                 <button type="button" aria-label="Close drawer" onClick={() => setSelection(undefined)}><X size={17} /></button>
               </div>
@@ -381,64 +381,54 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                   <footer><b>Vault storage:</b> {selectedItem.shelfTag || custody(selectedItem)}</footer>
                 </section>
                 <section className="claim-proof-panel">
-                  <div className="claim-panel-heading"><b>Claimant submitted proof</b><span>{selectedClaim.verified ? "96% Match" : "Unverified"}</span></div>
+                  <div className="claim-panel-heading"><b>Claimant submitted proof</b><span>{selectedClaim.verified ? "Verified" : "Unverified"}</span></div>
                   <div className="claimant-card"><div>{selectedClaim.claimant.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div><span><b>{selectedClaim.claimant}{claimant?.studentNumber ? ` (${claimant.studentNumber})` : ""}</b><small>{["PLM", "PLM Student"].includes(selectedClaim.accountType) ? "PLM Resident" : selectedClaim.accountType}</small></span></div>
                   <div className="claim-answer"><small>Ownership verification</small><p>"{selectedClaim.explanation}"</p></div>
                   {selectedClaim.proof?.startsWith("data:image/") && <img src={selectedClaim.proof} alt="Ownership evidence" />}
-                  <footer><span>PLM Student Registry</span><b>✓ Active Enrolled</b></footer>
                 </section>
               </div>
               <section className="claim-chat-panel">
                 <header><b>Direct chat with {selectedClaim.claimant}</b><span>Synced with Student Inbox</span></header>
                 <div className="claim-chat-thread">
-                  {(data?.claimThreads.find((thread) => thread.claimId === selectedClaim.id)?.messages ?? []).map((entry) => <div key={entry.id} className={entry.mine ? "mine" : "theirs"}><p>{entry.text}</p><small>{entry.mine ? "OSDS Admin Office" : selectedClaim.claimant}</small></div>)}
-                  {!data?.claimThreads.find((thread) => thread.claimId === selectedClaim.id)?.messages.length && <>
-                    <div className="theirs">
-                      <p>{selectedClaim.id === 108
-                        ? "Good afternoon po! I left my black leather wallet on the 2nd floor study table at the University Library."
-                        : selectedClaim.id === 105
-                          ? "Thank you so much to whoever turned it in! I can head to OSDS right away."
-                          : "Hi OSDS! I dropped my ID after our assembly at the University Activity Center."}</p>
-                      <small>{selectedClaim.claimant} · 2:14 PM</small>
-                    </div>
-                    <div className="mine">
-                      <p>{selectedClaim.status === "Pending"
-                        ? selectedClaim.id === 108
-                          ? "Hello Mayumi! Your wallet is safely stored at the OSDS Desk. We are reviewing your submitted proof now."
-                          : selectedClaim.id === 105
-                            ? "Hello Cianna! Your laptop is safely secured at the OSDS Desk. We are reviewing your submitted proof now."
-                            : "Hello Joshua! Your student ID is safely documented by OSDS. We are reviewing your submitted proof now."
-                        : "The claim status has been updated."}</p>
-                      <small>OSDS Admin Office · 2:18 PM</small>
-                    </div>
-                  </>}
+                  {selectedMessages.map((entry) => <div key={entry.id} className={entry.mine ? "mine" : "theirs"}><p>{entry.text}</p><small>{entry.mine ? "OSDS Admin Office" : selectedClaim.claimant}</small></div>)}
+                  {!selectedMessages.length && <p>{selectedIsSample ? "Messages are disabled for sample claims." : "No messages yet."}</p>}
                 </div>
-                {selectedClaim.claimantId !== user.id && <form onSubmit={(event) => {
+                {claimant && claimant.id !== user.id && <form onSubmit={(event) => {
                   event.preventDefault()
                   const form = event.currentTarget
                   const text = field(new FormData(form), "text")
                   void run(async () => { await adminMessageClaimant(selectedClaim.id, text); form.reset() }, "Message sent.")
-                }}><input name="text" required maxLength={2000} placeholder={`Type a message or pickup instruction to ${selectedClaim.claimant}...`} /><button disabled={writeDisabled}>Send</button></form>}
+                }}><input name="text" required maxLength={2000} placeholder={`Type a message or pickup instruction to ${selectedClaim.claimant}...`} /><button disabled={recordWriteDisabled}>Send</button></form>}
               </section>
             </div>
             <footer className="claim-drawer-footer">
               {selectedClaim.status === "Pending" ? <>
-                <button type="button" className="claim-reject" disabled={writeDisabled} onClick={() => void run(() => adminUpdateClaim(selectedClaim.id, "Rejected"), "Claim rejected.", true)}>Reject Claim</button>
-                <button type="button" className="claim-approve" disabled={writeDisabled || selectedItem.status === "Claimed"} onClick={() => void run(() => adminUpdateClaim(selectedClaim.id, "Approved"), "Claim approved. Confirm handover after release.")}><ShieldCheck size={16} /> Approve &amp; Confirm Handover</button>
+                <button type="button" className="claim-reject" disabled={recordWriteDisabled} onClick={() => void run(() => adminUpdateClaim(selectedClaim.id, "Rejected"), "Claim rejected.", true)}>Reject Claim</button>
+                <button type="button" className="claim-approve" disabled={recordWriteDisabled || selectedItem.status === "Claimed"} onClick={() => void run(() => adminUpdateClaim(selectedClaim.id, "Approved"), "Claim approved. Confirm handover after release.")}><ShieldCheck size={16} /> Approve &amp; Confirm Handover</button>
               </> : <>
-                {selectedClaim.status === "Approved" && selectedItem.status === "Claimed" ? <button type="button" className="claim-approve" disabled={writeDisabled} onClick={() => void run(() => adminUpdateItemStatus(selectedItem.id, "Returned"), "Handover confirmed.", true)}>Confirm Handover</button> : <button type="button" className="claim-approve" onClick={() => setSelection(undefined)}>Done</button>}
+                {selectedClaim.status === "Approved" && selectedItem.status === "Claimed" ? <button type="button" className="claim-approve" disabled={recordWriteDisabled} onClick={() => void run(() => adminUpdateItemStatus(selectedItem.id, "Returned"), "Handover confirmed.", true)}>Confirm Handover</button> : <button type="button" className="claim-approve" onClick={() => setSelection(undefined)}>Done</button>}
               </>}
             </footer>
           </div> : <>
-            {selectedItem.status !== "Lost" && selectedItem.status !== "Returned" && <form className="admin-form" onSubmit={submit((form) => void run(() =>
+            <section className="admin-inspection">
+              <span>{ticket(selectedItem.id)} · {displayStatus(selectedItem.status)}{selectedIsSample && " · Sample record"}</span>
+              <h3>{selectedItem.name}</h3>
+              <p>{selectedItem.category} · {selectedItem.location} · {selectedItem.date}</p>
+              <p>{selectedItem.description}</p>
+              {selectedItem.image && <img src={selectedItem.image} alt={selectedItem.name} />}
+              <p><b>Custody</b> {custody(selectedItem)}{selectedItem.shelfTag && ` · ${selectedItem.shelfTag}`}</p>
+              <p><b>Reported by</b> {selectedItem.reporter} · {selectedItem.reporterRole}</p>
+              {selectedItem.privateNotes && <p><b>Private notes</b> {selectedItem.privateNotes}</p>}
+            </section>
+            {!selectedIsSample && selectedItem.status !== "Lost" && selectedItem.status !== "Returned" && <form className="admin-form" onSubmit={submit((form) => void run(() =>
               adminSetCustody(selectedItem.id, field(form, "deskId") || null, field(form, "shelfTag")), "Custody updated."))}>
               <label>Custody desk<select name="deskId" defaultValue={selectedItem.custodyDeskId || ""}><option value="">With finder</option>
-                {desks.filter((desk) => desk.active || selectedItem.custodyDeskId === desk.id).map((desk) => <option key={desk.id} value={desk.id} disabled={!desk.active}>{desk.name}{desk.active ? "" : " (paused)"}</option>)}
+                {selectedDesks.filter((desk) => desk.active || selectedItem.custodyDeskId === desk.id).map((desk) => <option key={desk.id} value={desk.id} disabled={!desk.active}>{desk.name}{desk.active ? "" : " (paused)"}</option>)}
               </select></label>
               <label>Shelf tag<input name="shelfTag" defaultValue={selectedItem.shelfTag} maxLength={120} /></label>
               <button className="admin-refresh" disabled={writeDisabled}>Save custody</button>
             </form>}
-            {selectedItem.privacy === "Held" ? <form className="admin-form" onSubmit={submit((form) => void run(() => adminModerate(selectedItem.id, {
+            {!selectedIsSample && (selectedItem.privacy === "Held" ? <form className="admin-form" onSubmit={submit((form) => void run(() => adminModerate(selectedItem.id, {
               action: "publish", name: field(form, "name"), description: field(form, "description"), question: field(form, "question"),
             }), "Redacted report published."))}>
               <h3>Privacy Review</h3><p>Remove sensitive details from the public text. Publishing removes the original photo from the feed.</p>
@@ -446,7 +436,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               <label>Redacted description<textarea name="description" defaultValue={selectedItem.description} required maxLength={1500} /></label>
               {selectedItem.question && <label>Public ownership question<input name="question" defaultValue={selectedItem.question} required maxLength={200} /></label>}
               <button className="btn-primary" disabled={writeDisabled}>Publish redacted report</button>
-            </form> : <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminModerate(selectedItem.id, { action: "hold" }), "Report held for privacy review.")}>Hold for privacy review</button>}
+            </form> : <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminModerate(selectedItem.id, { action: "hold" }), "Report held for privacy review.")}>Hold for privacy review</button>)}
             <div className="admin-record-list">{claims.filter((claim) => claim.itemId === selectedItem.id).map((claim) => <article key={claim.id}><b>{claim.claimant} · {claim.status}</b>
               <button className="inspect-button" onClick={() => inspect({ type: "claim", id: claim.id })}>Review claim</button>
             </article>)}</div>
