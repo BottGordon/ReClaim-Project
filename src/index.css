@@ -1003,7 +1003,9 @@
 .claim-answer { padding: 10px; border-radius: 10px; background: #f6f3ee; }
 .claim-answer small { color: rgb(75 46 31 / .58); font-size: 8px; font-weight: 800; }
 .claim-answer p { margin-top: 5px; font-size: 11px; font-weight: 700; line-height: 1.5; }
-.claim-proof-panel > img { max-height: 90px; margin-top: 10px; border-radius: 8px; object-fit: cover; }
+.claim-proof-photo { margin-top: 10px; }
+.claim-proof-photo figcaption { margin-bottom: 5px; color: #4b2e1f; font-size: 10px; font-weight: 700; }
+.claim-proof-photo img { display: block; width: 100%; max-height: 300px; border-radius: 8px; background: #fff; object-fit: contain; }
 .claim-proof-panel footer { display: flex; justify-content: space-between; margin-top: auto; padding-top: 10px; border-top: 1px solid rgb(75 46 31 / .10); font-size: 9px; }
 .claim-chat-panel { margin-top: 18px; padding: 16px; border-radius: 16px; background: #fff; box-shadow: 0 8px 24px rgb(75 46 31 / .06); }
 .claim-chat-panel > header { display: flex; justify-content: space-between; margin-bottom: 10px; }

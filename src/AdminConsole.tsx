@@ -428,8 +428,13 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
                 <section className="claim-proof-panel">
                   <div className="claim-panel-heading"><b>Claimant submitted proof</b><span>{selectedClaim.verified ? "Verified" : "Unverified"}</span></div>
                   <div className="claimant-card"><div>{selectedClaim.claimant.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div><span><b>{selectedClaim.claimant}{claimant?.studentNumber ? ` (${claimant.studentNumber})` : ""}</b><small>{["PLM", "PLM Student"].includes(selectedClaim.accountType) ? "PLM Resident" : selectedClaim.accountType}</small></span></div>
-                  <div className="claim-answer"><small>Ownership verification</small><p>"{selectedClaim.explanation}"</p></div>
-                  {selectedClaim.proof?.startsWith("data:image/") && <img src={selectedClaim.proof} alt="Ownership evidence" />}
+                  <div className="claim-answer">
+                    <small>Ownership verification</small><p>"{selectedClaim.explanation}"</p>
+                    {selectedClaim.proof?.startsWith("data:image/") && <figure className="claim-proof-photo">
+                      <figcaption>Submitted proof photo</figcaption>
+                      <img src={selectedClaim.proof} alt="Ownership evidence submitted by the claimant" />
+                    </figure>}
+                  </div>
                 </section>
               </div>
               <section className="claim-chat-panel">
