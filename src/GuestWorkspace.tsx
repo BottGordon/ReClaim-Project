@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 import { guestReports, messageGuestDesk, submitGuestReport, type ApiUser, type GuestReport } from "./lib/api"
+import { PhoneSettings, phoneInput, phonePattern } from "./PhoneSettings"
 
 const categories = ["Electronics", "Accessories", "IDs and Cards", "Books and Notes", "Clothing", "Others"]
 
 export function GuestWorkspace({ user, brand, onSignOut }: { user: ApiUser; brand: ReactNode; onSignOut: () => Promise<void> }) {
   const [reports, setReports] = useState<GuestReport[]>([])
-  const [tab, setTab] = useState<"submit" | "track">("submit")
+  const [tab, setTab] = useState<"submit" | "track" | "contact">("submit")
   const [selected, setSelected] = useState<number>()
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(true)
@@ -69,14 +70,15 @@ export function GuestWorkspace({ user, brand, onSignOut }: { user: ApiUser; bran
       <nav aria-label="Guest workspace" className="my-6 flex flex-wrap gap-3">
         <button aria-pressed={tab === "submit"} className={tab === "submit" ? "claim-approve" : "admin-refresh"} onClick={() => setTab("submit")}>Submit a report</button>
         <button aria-pressed={tab === "track"} className={tab === "track" ? "claim-approve" : "admin-refresh"} onClick={() => setTab("track")}>Track my reports</button>
+        <button aria-pressed={tab === "contact"} className={tab === "contact" ? "claim-approve" : "admin-refresh"} onClick={() => setTab("contact")}>Contact settings</button>
       </nav>
       {error && <p role="alert" className="admin-feedback error">{error}</p>}
       {notice && <p role="status" className="admin-feedback">{notice}</p>}
-      {tab === "submit" ? <form className="admin-form rounded-2xl bg-white" onSubmit={(event) => void save(event)}>
+      {tab === "contact" ? <section className="rounded-2xl bg-white p-5"><PhoneSettings phone={user.phone} /></section> : tab === "submit" ? <form className="admin-form rounded-2xl bg-white" onSubmit={(event) => void save(event)}>
         <label>Report type<select name="kind" required><option value="Lost">Lost item</option><option value="Found">Found item</option></select></label>
         <label>Contact name<input name="contactName" required maxLength={100} defaultValue={user.name} /></label>
         <label>Verified email<input type="email" value={user.email} readOnly /></label>
-        <label>Phone (optional)<input name="phone" type="tel" maxLength={30} defaultValue={user.phone} /></label>
+        <label>Phone (optional)<input name="phone" type="tel" pattern={phonePattern} defaultValue={phoneInput(user.phone || "")} onInput={(event) => { event.currentTarget.value = phoneInput(event.currentTarget.value) }} /></label>
         <label>Item name<input name="name" required maxLength={120} /></label>
         <label>Category<select name="category" required>{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
         <label>Where it was lost or found<input name="location" required maxLength={160} /></label>

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from common import ApiError
 
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT.parent
@@ -21,23 +22,59 @@ def load_environment():
 
 
 class Store:
-    def __init__(self):
+    def __init__(self, client=None):
+        self.remote = os.getenv("RECLAIM_STORAGE") == "supabase"
+        self.client = client
+        self.revision = None
+        if self.remote:
+            url = os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL")
+            key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            if not url or not key or client is None:
+                raise RuntimeError("Supabase record storage requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
+            self.endpoint = url.rstrip("/") + "/rest/v1/reclaim_record_store"
+            self.headers = {"apikey": key, "Authorization": f"Bearer {key}", "Prefer": "return=representation"}
         directory = Path(os.getenv("RECLAIM_DATA_DIR") or ROOT / "data")
-        directory.mkdir(parents=True, exist_ok=True)
+        if not self.remote:
+            directory.mkdir(parents=True, exist_ok=True)
         self.file = directory / "reclaim.json"
         desks = json.loads((PROJECT / "shared/custodyDesks.json").read_text(encoding="utf-8"))
-        try:
-            saved = json.loads(self.file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            saved = {}
+        saved = self.load_remote() if self.remote else None
+        if saved is None:
+            try:
+                saved = json.loads(self.file.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                saved = {}
 
         self.data = {key: [] for key in ("users", "items", "claims", "conversations", "notifications", "matches")}
         self.data.update({"desks": desks, **saved})
         if not isinstance(self.data["items"], list) or not self.data["items"]:
             self.data["items"] = json.loads((ROOT / "seed_items.json").read_text(encoding="utf-8"))
         self.update_desks(desks)
-        if self.data != saved:
+        self.snapshot = json.dumps(self.data, allow_nan=False)
+        if self.data != saved or (self.remote and self.revision is None):
             self.save()
+
+    def load_remote(self):
+        response = self.client.get(self.endpoint, headers=self.headers, params={"id": "eq.workspace"})
+        if not response.is_success:
+            raise ApiError(503, "Could not load the persistent ReClaim records. Check the storage migration and server configuration.")
+        rows = response.json()
+        if not rows:
+            return None
+        self.revision = rows[0]["revision"]
+        return rows[0]["payload"]
+
+    def save_remote(self):
+        revision = 1 if self.revision is None else self.revision + 1
+        payload = {"revision": revision, "payload": self.data}
+        if self.revision is None:
+            response = self.client.post(self.endpoint, headers=self.headers, json={"id": "workspace", **payload})
+        else:
+            response = self.client.patch(self.endpoint, headers=self.headers, json=payload,
+                                         params={"id": "eq.workspace", "revision": f"eq.{self.revision}"})
+        if not response.is_success or not response.json():
+            raise ApiError(503, "Could not save the persistent ReClaim records. Try again shortly.")
+        self.revision = revision
 
     def update_desks(self, desks):
         aliases = {"vault": "osds", "library-security": "library", "main-gate": "gate"}
@@ -69,12 +106,16 @@ class Store:
     def save(self):
         temporary = self.file.with_suffix(".json.tmp")
         try:
-            temporary.write_text(json.dumps(self.data, indent=2, allow_nan=False), encoding="utf-8")
-            temporary.replace(self.file)
-        except (OSError, ValueError):
-            if self.file.exists():
-                saved = json.loads(self.file.read_text(encoding="utf-8"))
-                for key, value in self.data.items():
-                    if isinstance(value, list):
-                        value[:] = saved.get(key, [])
+            snapshot = json.dumps(self.data, allow_nan=False)
+            if self.remote:
+                self.save_remote()
+            else:
+                temporary.write_text(snapshot, encoding="utf-8")
+                temporary.replace(self.file)
+            self.snapshot = snapshot
+        except Exception:
+            saved = json.loads(self.snapshot)
+            for key, value in self.data.items():
+                if isinstance(value, list):
+                    value[:] = saved[key]
             raise

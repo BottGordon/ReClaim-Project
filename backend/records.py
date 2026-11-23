@@ -44,6 +44,7 @@ def message_view(message, user_id, other_user_id):
     return {
         "id": message["id"], "mine": mine, "text": message["text"], "time": message["time"],
         "read": (other_user_id if mine else user_id) in (message.get("readBy") or []),
+        **({"attachment": message["attachment"]} if "attachment" in message else {}),
     }
 
 
@@ -165,7 +166,7 @@ class Records:
             "id": next_id(self.claims), "itemId": item["id"], "claimant": user["name"],
             "claimantId": user["id"], "accountType": user["accountType"], "status": "Pending",
             "requested": "Just now", "createdAt": timestamp(), "verified": True,
-            "explanation": required(data.get("explanation"), "Ownership details", 1200),
+            "explanation": clean(data.get("explanation"), 1200),
             "proof": clean(data.get("proof"), MAX_BODY_BYTES),
         }
         self.claims.insert(0, claim)
@@ -307,12 +308,29 @@ class Records:
                 message["readBy"] = readers
             self.store.save()
             return 200, {"ok": True}
-        message = self.add_message(thread, user_id, required(data.get("text"), "Message", 2000))
+        text = clean(data.get("text"), 2000)
+        attachment = data.get("attachment")
+        if attachment is not None:
+            if not isinstance(attachment, dict):
+                raise ApiError(400, "Invalid message attachment.")
+            name = required(attachment.get("name"), "Attachment name", 120)
+            url = attachment.get("url")
+            if not isinstance(url, str) or len(url) > 2_796_260 or not re.fullmatch(
+                r"data:(?:image/(?:png|jpeg|webp)|application/pdf);base64,[A-Za-z0-9+/]+={0,2}", url,
+            ):
+                raise ApiError(400, "Choose a PNG, JPEG, WebP, or PDF file up to 2 MB.")
+        if not text and attachment is None:
+            raise ApiError(400, "Enter a message or attach a file.")
+        message = self.add_message(thread, user_id, text)
+        if attachment is not None:
+            message["attachment"] = {"name": name, "url": url}
         recipient_id = next((entry for entry in thread["participantIds"] if entry != user_id), None)
         if recipient_id:
             self.notify(recipient_id, "message", "New message", f"{user['name']} sent you a message.", "chat")
         self.store.save()
-        return 201, {"message": {"id": message["id"], "mine": True, "text": message["text"], "time": message["time"]}}
+        view = message_view(message, user_id, recipient_id)
+        view.pop("read")
+        return 201, {"message": view}
 
     def update_notification(self, user, value, data):
         notification = find(self.notifications, id=value, userId=user["id"])

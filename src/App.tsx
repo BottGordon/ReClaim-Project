@@ -1,5 +1,6 @@
 import { AdminConsole } from "./AdminConsole"
 import { GuestWorkspace } from "./GuestWorkspace"
+import { PhoneSettings, phoneInput, phonePattern, studentInput } from "./PhoneSettings"
 import { AccountAvatar } from "./AccountAvatar"
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -8,6 +9,7 @@ import {
   ApiItem,
   ApiNotification,
   ApiUser,
+  MessageAttachment,
   bootstrap,
   changePassword,
   clearSession,
@@ -150,6 +152,7 @@ type Message = {
   text: string
   time: string
   read?: boolean
+  attachment?: MessageAttachment
 }
 
 type Conversation = {
@@ -1358,7 +1361,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
     {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Resident / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
     {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM resident account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM resident email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
     {stage === "otp" && <><p className="eyebrow mt-5">Email verification</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Check your inbox.</h1><form className="mt-6 space-y-5" onSubmit={checkCode}><p className="auth-copy">Enter the six-digit code sent to <b>{email}</b>.</p><label className="field-label" htmlFor="signup-otp">One-time password</label><input className="plain-input w-full text-center tracking-[0.35em]" id="signup-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify email"}<ChevronRight size={16} /></button><button type="button" className="text-button" disabled={busy} onClick={async () => { setError(""); try { await resendVerification(email); setCode("") } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") } }}>Resend code</button></form></>}
-    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: event.target.value })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
+    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required placeholder={role === "student" ? "2024-11649" : "Staff ID"} pattern={role === "student" ? "[0-9]{4}-[0-9]{5}" : undefined} value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: role === "student" ? studentInput(event.target.value) : event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
   </div></main></div>
 }
 function AuthDecor() {
@@ -1507,7 +1510,8 @@ function Field({
           type={type}
           placeholder={placeholder}
           inputMode={inputMode}
-          pattern={pattern}
+          pattern={name === "contact" ? phonePattern : pattern}
+          onInput={name === "contact" ? (event) => { event.currentTarget.value = phoneInput(event.currentTarget.value) } : undefined}
           title={title}
           required={!label.includes("optional")}
         />
@@ -1581,6 +1585,11 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<DemoUser | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [restoringSession, setRestoringSession] = useState(true)
+  const [sessionError, setSessionError] = useState("")
+  const [restoreAttempt, setRestoreAttempt] = useState(0)
+  const workspaceRequest = useRef(0)
+  const workspaceApplied = useRef(0)
+  const accountGeneration = useRef(0)
   const [page, setPage] = useState<Page>("browse")
   const [items, setItems] = useState<ApiItem[]>([])
   const [claims, setClaims] = useState<ApiClaim[]>([])
@@ -1622,8 +1631,13 @@ export default function App() {
   }
 
   async function refreshWorkspace(routeToHome = false) {
+    const generation = accountGeneration.current
+    const requestId = ++workspaceRequest.current
     const data = await bootstrap()
-    applyWorkspace(data, routeToHome)
+    if (generation === accountGeneration.current && requestId >= workspaceApplied.current) {
+      workspaceApplied.current = requestId
+      applyWorkspace(data, routeToHome)
+    }
     return data
   }
 
@@ -1631,13 +1645,15 @@ export default function App() {
     let active = true
     void bootstrap().then((data) => {
       if (active) applyWorkspace(data, true)
-    }).catch(() => {
-      if (active) clearSession()
+    }).catch((failure) => {
+      if (!active) return
+      if (failure?.status === 401) clearSession()
+      else setSessionError(failure instanceof Error ? failure.message : "Could not load your workspace.")
     }).finally(() => {
       if (active) setRestoringSession(false)
     })
     return () => { active = false }
-  }, [])
+  }, [restoreAttempt])
 
   useEffect(() => {
     if (!currentUser) return
@@ -1667,6 +1683,7 @@ export default function App() {
   }
 
   async function signOut() {
+    accountGeneration.current++
     closeAccountMenu()
     await logout().catch(() => {})
     setCurrentUser(null)
@@ -1679,6 +1696,10 @@ export default function App() {
   }
 
   if (restoringSession) return <p role="status" className="p-6">Checking your session…</p>
+  if (sessionError) return <section className="p-6">
+    <p className="form-error" role="alert">{sessionError}</p>
+    <button className="btn-secondary mt-4" onClick={() => { setSessionError(""); setRestoringSession(true); setRestoreAttempt((attempt) => attempt + 1) }}>Retry</button>
+  </section>
 
   if (!currentUser)
     return (
@@ -1697,6 +1718,7 @@ export default function App() {
 
   if (isAdmin && page === "admin") {
     return <AdminConsole user={currentUser} brand={<Logo light />} onSignOut={async () => {
+      accountGeneration.current++
       await logout()
       window.history.replaceState(null, "", "/")
       setCurrentUser(null)
@@ -2539,7 +2561,7 @@ function ItemModal({
                   <MessageCircle size={16} /> {item.status === "Returned" ? "Think this is yours? Message the finder" : "Message reporter"}
                 </button>}
                 {item.mine && item.status === "Returned" && <button className="btn-primary" onClick={onUndoReturn}>Undo return</button>}
-                {(item.status === "Found" ||
+                {!item.mine && (item.status === "Found" ||
                   item.status === "Pending Claim") && (
                   <button
                     className="btn-primary"
@@ -2958,6 +2980,10 @@ function Chat({
 }) {
   const [selected, setSelected] = useState(conversations[0]?.id)
   const [message, setMessage] = useState("")
+  const [attachment, setAttachment] = useState<MessageAttachment>()
+  const [sending, setSending] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const relatedDialog = useRef<HTMLDialogElement>(null)
   const [search, setSearch] = useState("")
   const [error, setError] = useState("")
   const conversation =
@@ -2965,13 +2991,16 @@ function Chat({
   const item = items.find((entry) => entry.id === conversation?.itemId)
   const conversationName = conversation?.user
   async function send() {
-    if (!message.trim() || !conversation) return
+    if ((!message.trim() && !attachment) || !conversation || sending) return
     setError("")
+    setSending(true)
     try {
-      await sendMessage(conversation.id, message.trim())
+      await sendMessage(conversation.id, message.trim(), attachment)
       setMessage("")
+      setAttachment(undefined)
       await onRefresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send message.") }
+    finally { setSending(false) }
   }
   return (
     <>
@@ -2986,9 +3015,6 @@ function Chat({
         >
           <div className="conversation-head">
             <h3>Messages</h3>
-            <button className="icon-button">
-              <Pencil size={16} />
-            </button>
           </div>
           <div className="conversation-search">
             <Search size={16} />
@@ -3021,12 +3047,13 @@ function Chat({
                     }`}
                     onClick={() => {
                       setSelected(entry.id)
+                      if (entry.id !== conversation?.id) { setMessage(""); setAttachment(undefined) }
                       setConversations((all) =>
                         all.map((item) =>
                           item.id === entry.id ? { ...item, unread: 0 } : item,
                         ),
                       )
-                      void markConversationRead(entry.id).then(() => onRefresh())
+                      void markConversationRead(entry.id).then(() => onRefresh()).catch(() => setError("Could not update the conversation."))
                     }}
                   >
                     <span className="avatar">{displayAvatar}</span>
@@ -3036,7 +3063,7 @@ function Chat({
                       <small>{last?.time || "No messages yet"}</small>
                       </span>
                       <em>{related?.name}</em>
-                      <p className={entry.unread > 0 ? "font-bold" : ""}>{last?.text || "Start the conversation"}</p>
+                      <p className={entry.unread > 0 ? "font-bold" : ""}>{last?.text || last?.attachment?.name || "Start the conversation"}</p>
                     </span>
                     {entry.unread > 0 && <i>{entry.unread}</i>}
                   </button>
@@ -3044,7 +3071,7 @@ function Chat({
               })}
           </div>
         </aside>
-        {conversation && item && (
+        {conversation && (
           <section className="message-pane">
             <header className="message-head">
               <span className="avatar">
@@ -3057,14 +3084,14 @@ function Chat({
                 <b>{conversationName}</b>
                 <small>Active now</small>
               </div>
-              <button className="related-item">
+              {item && <button className="related-item" type="button" onClick={() => relatedDialog.current?.showModal()}>
                 <img src={itemImageSource(item.image)} alt="" onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
                 <span>
                   <small>Related item</small>
                   <b>{item.name}</b>
                 </span>
                 <ChevronRight size={16} />
-              </button>
+              </button>}
             </header>
             <div className="secure-strip">
               <LockKeyhole size={14} /> Messages are private to claim
@@ -3077,14 +3104,33 @@ function Chat({
                   key={entry.id}
                   className={`message-wrap ${entry.mine ? "mine" : ""}`}
                 >
-                  <div className={`message ${!entry.mine && !entry.read ? "font-bold" : ""}`}>{entry.text}</div>
+                  <div className={`message ${!entry.mine && !entry.read ? "font-bold" : ""}`}>
+                    {entry.text}{entry.attachment && <div><a className="underline" href={entry.attachment.url} download={entry.attachment.name}>{entry.attachment.name}</a></div>}
+                  </div>
                   <span>{entry.time}{entry.mine && <small className="ml-2">{entry.read ? "Seen" : "Sent"}</small>}</span>
                 </div>
               ))}
             </div>
             {error && <div className="form-error mx-5">{error}</div>}
+            {attachment && <div className="flex items-center justify-between gap-2 px-4 py-2 text-sm">
+              <span className="truncate">{attachment.name}</span>
+              <button type="button" aria-label="Remove attachment" onClick={() => setAttachment(undefined)}><X size={16} /></button>
+            </div>}
             <div className="message-compose">
-              <button className="icon-button">
+              <input ref={fileInput} className="hidden" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                event.currentTarget.value = ""
+                if (!file) return
+                if (file.size > 2 * 1024 * 1024 || !["image/png", "image/jpeg", "image/webp", "application/pdf"].includes(file.type)) {
+                  setError("Choose a PNG, JPEG, WebP, or PDF file up to 2 MB.")
+                  return
+                }
+                const reader = new FileReader()
+                reader.onload = () => { setAttachment({ name: file.name, url: String(reader.result) }); setError("") }
+                reader.onerror = () => setError("Could not read the attachment.")
+                reader.readAsDataURL(file)
+              }} />
+              <button className="icon-button" type="button" aria-label="Attach a file" onClick={() => fileInput.current?.click()}>
                 <Plus size={18} />
               </button>
               <input
@@ -3094,11 +3140,13 @@ function Chat({
                   if (event.key === "Enter") send()
                 }}
                 placeholder="Write a message..."
+                maxLength={2000}
               />
               <button
                 className="send-button"
                 onClick={send}
                 aria-label="Send message"
+                disabled={sending || (!message.trim() && !attachment)}
               >
                 <Send size={17} />
               </button>
@@ -3106,6 +3154,11 @@ function Chat({
           </section>
         )}
       </div>
+      {item && <dialog ref={relatedDialog} className="admin-dialog" aria-labelledby="chat-item-title">
+        <header><h2 id="chat-item-title">{item.name}</h2><button type="button" aria-label="Close item preview" onClick={() => relatedDialog.current?.close()}><X size={20} /></button></header>
+        <p className="mb-2 text-sm">{item.status} · {item.category} · {item.location}</p>
+        <p>{item.description}</p>
+      </dialog>}
     </>
   )
 }
@@ -3204,7 +3257,6 @@ function Profile({
   const [photo, setPhoto] = useState(user.photo || "")
   const [photoError, setPhotoError] = useState("")
   const photoRef = useRef<HTMLInputElement>(null)
-  const [phone] = useState(user.phone || "")
   const [securityOpen, setSecurityOpen] = useState(false)
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
@@ -3256,8 +3308,9 @@ function Profile({
             ) : (
               <ProfileField label={user.staffId ? "Staff ID" : "Student number"} value={user.staffId || user.studentNumber || "Not provided"} />
             )}
-            <ProfileField label="Contact number" value={phone} placeholder="Not provided" />
           </div>
+          <div className="settings-divider" />
+          <PhoneSettings phone={user.phone} />
           <div className="settings-divider" />
           <div className="settings-head">
             <div>

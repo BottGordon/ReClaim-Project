@@ -1,3 +1,4 @@
+from auth import public_user
 from common import ApiError, clean, find, item_id, required, timestamp
 from records import normalize_image, open_found
 
@@ -28,6 +29,7 @@ class Admin:
         for entry in records.users:
             if not entry.get("emailVerified"):
                 continue
+            entry = public_user(entry)
             summary = {key: entry[key] for key in ("id", "name", "email", "studentNumber", "staffId") if key in entry}
             summary["role"] = "Admin" if entry["id"] == user["id"] else entry["accountType"]
             users.append(summary)

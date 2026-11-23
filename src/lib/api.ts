@@ -71,7 +71,8 @@ export type ApiClaim = {
   proof?: string
 }
 
-export type ApiMessage = { id: number; mine: boolean; text: string; time: string; read?: boolean }
+export type MessageAttachment = { name: string; url: string }
+export type ApiMessage = { id: number; mine: boolean; text: string; time: string; read?: boolean; attachment?: MessageAttachment }
 export type ApiConversation = {
   id: number
   itemId: number
@@ -191,24 +192,27 @@ export async function register(input: Record<string, string>) {
   if (completedRegistrations.has(email)) {
     throw new Error("This account has already been completed.")
   }
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  if (sessionError) throw new Error("Could not restore the verified account session.")
+  const session = sessionData.session
+  if (!session?.access_token || !session.user || session.user.email?.toLowerCase() !== email) {
+    throw new Error("No verified account session exists. Please verify the OTP again.")
+  }
+  const details = await request<{ phone: string; idNumber: string }>("/auth/registration-details", {
+    method: "POST", body: JSON.stringify({ phone: input.phone, idNumber: input.idNumber, accountType: input.accountType, role: input.role, accessToken: session.access_token }),
+  })
+  const accountType = input.accountType === "External User" ? "External User" : input.role === "staff" ? "PLM Staff" : "PLM Resident"
   const { error: updateError } = await supabase.auth.updateUser({
     password: input.password,
     data: {
       full_name: input.name,
-      student_number: input.idNumber,
-      phone: input.phone,
-      account_type: input.accountType,
+      student_number: accountType === "PLM Resident" ? details.idNumber : null,
+      staff_id: accountType === "PLM Staff" ? details.idNumber : null,
+      phone: details.phone,
+      account_type: accountType,
     },
   })
   if (updateError) throw updateError
-
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
-  if (sessionError) throw new Error("Could not restore the verified account session.")
-
-  const session = sessionData.session
-  if (!session?.access_token || !session.user) {
-    throw new Error("No verified account session exists. Please verify the OTP again.")
-  }
 
   const profile = {
     id: session.user.id,
@@ -298,8 +302,31 @@ export function verifyPasswordReset(email: string, code: string) {
   })
 }
 
-export function bootstrap() {
-  return request<Bootstrap>("/bootstrap")
+export async function bootstrap() {
+  const originalToken = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+  try {
+    return await request<Bootstrap>("/bootstrap")
+  } catch (failure) {
+    if ((failure as ApiError).status !== 401 || !supabase || localStorage.getItem(REMEMBER_KEY) === null) throw failure
+    const remember = localStorage.getItem(REMEMBER_KEY) === "true"
+    if (!remember && !sessionStorage.getItem(TOKEN_KEY)) throw failure
+    const { data } = await supabase.auth.getSession()
+    if (!data.session) throw failure
+    const result = await request<{ token: string }>("/auth/supabase-session", {
+      method: "POST", body: JSON.stringify({ accessToken: data.session.access_token }),
+    })
+    if (originalToken !== (localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY))) throw failure
+    rememberSession(result.token, remember)
+    return request<Bootstrap>("/bootstrap")
+  }
+}
+
+export function requestPhoneChange(phone: string) {
+  return request<{ demoCode?: string }>("/profile/phone/code", { method: "POST", body: JSON.stringify({ phone }) })
+}
+
+export function confirmPhoneChange(code: string) {
+  return request<{ user: ApiUser }>("/profile/phone/confirm", { method: "POST", body: JSON.stringify({ code }) })
 }
 
 export function adminOverview() {
@@ -410,9 +437,9 @@ export async function undoReturned(id: number) {
   return request<{ item: ApiItem }>(`/items/${id}/undo-return`, { method: "PATCH", body: "{}" })
 }
 
-export async function sendMessage(conversationId: number, text: string) {
+export async function sendMessage(conversationId: number, text: string, attachment?: MessageAttachment) {
   return request<{ message: ApiMessage }>(`/conversations/${conversationId}/messages`, {
-    method: "POST", body: JSON.stringify({ text }),
+    method: "POST", body: JSON.stringify({ text, attachment }),
   })
 }
 

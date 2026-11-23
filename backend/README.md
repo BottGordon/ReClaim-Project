@@ -2,6 +2,14 @@
 
 The API runs on Python 3.11+ with FastAPI and Uvicorn. It reads and writes the existing `backend/data/reclaim.json` format and accepts existing scrypt password hashes.
 
+## Preserve records across hosted restarts
+
+Use a persistent filesystem with `RECLAIM_DATA_DIR`, or apply the Supabase migration `202611230002_reclaim_record_store.sql` and set `RECLAIM_STORAGE=supabase` on the API host. Supabase storage uses `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY`. Run one API instance. The migration stores the existing workspace record format in a table accessible only to the service role.
+
+Back up the current `reclaim.json` before switching storage. If the Supabase table is empty at startup, the API imports the file from `RECLAIM_DATA_DIR` if present, or initializes a new workspace. If using an ephemeral Render filesystem, export the file before redeploying if you need those records. An existing Supabase workspace takes precedence over the local file.
+
+Contact-number changes use a code sent to the account email. Linked Supabase accounts use the Supabase email OTP flow when Microsoft Graph is unavailable. The Supabase Magic Link email template must include `{{ .Token }}`. Local accounts use the Microsoft Graph delivery configuration in production.
+
 ## Run locally
 
 From the project root, install the Python dependencies and start the API:

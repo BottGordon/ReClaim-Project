@@ -77,10 +77,13 @@ class Service:
                 "ok": True, "service": "reclaim-api", "custodyDeskCount": len(records.desks), "guestReports": True,
             })),
             ("POST", r"/api/auth/supabase-session", None, True, lambda u, t, m, d: auth.exchange_session(d)),
+            ("POST", r"/api/auth/registration-details", None, True, lambda u, t, m, d: auth.check_registration(d)),
             ("POST", r"/api/auth/login", None, True, lambda u, t, m, d: auth.login(d)),
             ("POST", r"/api/auth/logout", None, False, self.logout),
             ("GET", r"/api/auth/me", "account", False, lambda u, *_: (200, {"user": public_user(u)})),
             ("GET", r"/api/bootstrap", "account", False, self.bootstrap),
+            ("POST", r"/api/profile/phone/code", "account", True, lambda u, t, m, d: auth.start_phone_change(u, t, d)),
+            ("POST", r"/api/profile/phone/confirm", "account", True, lambda u, t, m, d: auth.finish_phone_change(u, t, d)),
             ("GET", r"/api/guest/reports", "guest", False, lambda u, *_: self.guest.list(u)),
             ("POST", r"/api/guest/reports", "guest", True, lambda u, t, m, d: self.guest.submit(u, d)),
             ("POST", r"/api/guest/reports/([0-9]+)/messages", "guest", True, lambda u, t, m, d: self.guest.message(u, m[1], d)),
@@ -182,7 +185,7 @@ async def lifespan(app):
     configured_origins = os.getenv("CORS_ORIGINS") or "http://localhost:8443"
     app.state.allowed_origins = {origin.strip() for origin in configured_origins.split(",") if origin.strip()}
     with httpx.Client(timeout=10, follow_redirects=False) as client:
-        app.state.service = Service(Store(), client)
+        app.state.service = Service(Store(client), client)
         yield
 
 

@@ -21,7 +21,7 @@ const views = [
 type View = (typeof views)[number][0]
 type Selection = { type: "walk-in" | "notifications" } | { type: "item" | "claim"; id: number }
 const ticket = (id: number) => "#RCL-" + String(id).padStart(3, "0")
-const displayStatus = (status: ApiItem["status"]) => status === "Returned" ? "Reunited" : status
+const displayStatus = (status: ApiItem["status"]) => status
 const categories = ["Electronics", "Accessories", "IDs and Cards", "Books and Notes", "Clothing", "Others"]
 const field = (data: FormData, name: string) => String(data.get(name) || "")
 const messageFor = (error: unknown) => error instanceof Error ? error.message : "The request could not be completed."
@@ -251,7 +251,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
 
   function exportAnalytics() {
     const quote = (value: string) => '"' + (/^[\s]*[=+\-@]/.test(value) ? "'" : "") + value.replace(/"/g, '""') + '"'
-    const csv = ["Location,Reports,Reunited,Source",
+    const csv = ["Location,Reports,Returned,Source",
       ...[...analytics].map(([location, stats]) => [quote(location), stats.reports, stats.returned, "Live"].join(",")),
       ...presentationLocations.map((entry) => [quote(entry.location), entry.reports, entry.returned, "Sample"].join(",")),
     ].join("\r\n")
@@ -266,7 +266,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   function filterButtons(values: string[]) {
     return <div className="admin-filter-pills" aria-label="Filters">{values.map((value) =>
       <button key={value} className={filter === value ? "active" : ""} aria-pressed={filter === value} onClick={() => setFilter(value)}>
-        {value === "Returned" ? "Reunited" : value}
+        {value}
       </button>
     )}</div>
   }
@@ -354,7 +354,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
             <button onClick={() => navigate("claims")}><div><span>Pending Claims</span><ShieldCheck size={18} /></div><strong><b>{data.stats.pendingClaims}</b><em>Action Required</em></strong></button>
             <button onClick={() => navigate("custody")}><div><span>In Physical Custody</span><PackageCheck size={18} /></div><strong><b>{adminDemo.stats.inCustody}</b><em>Sample · {inCustody} live</em></strong></button>
             <button onClick={() => navigate("inventory")}><div><span>Active Reports</span><Package size={18} /></div><strong><b>{adminDemo.stats.activeReports}</b><em>Sample · {activeReports} live</em></strong></button>
-            <button onClick={() => navigate("analytics")}><div><span>Items Reunited</span><ShieldCheck size={18} /></div><strong><b>{adminDemo.stats.returnedItems}</b><em>Sample · {liveReturned} live</em></strong></button>
+            <button onClick={() => navigate("analytics")}><div><span>Returned Items</span><ShieldCheck size={18} /></div><strong><b>{adminDemo.stats.returnedItems}</b><em>Sample · {liveReturned} live</em></strong></button>
           </section>
           <div className="admin-heading admin-dashboard-heading"><h2>Claims to Verify</h2><div className="admin-record-actions">
             <button className="admin-refresh" onClick={() => navigate("moderation")}>Needs Privacy Review ({held.length})</button>
@@ -406,14 +406,14 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           {!matches.some((match) => visibleIds.has(match.lostId) || visibleIds.has(match.foundId)) && <div className="admin-empty-card"><MessageCircle size={28} /><h2>No match suggestions</h2><p>New lost and found matches will appear here.</p></div>}
         </div>}
         {view === "analytics" && <div className="admin-analytics-grid">
-          <section className="admin-chart-card"><header><div><h2>Reports &amp; Verified Returns by Building</h2><p>Comparing total logged items with verified student reunions</p></div><div className="admin-chart-legend"><span><i />Total logged</span><span><i />Reunited</span></div></header>
+          <section className="admin-chart-card"><header><div><h2>Reports &amp; Verified Returns by Building</h2><p>Comparing total logged items with verified returns</p></div><div className="admin-chart-legend"><span><i />Total logged</span><span><i />Returned</span></div></header>
             <div className="admin-chart">{locations.map(({ location, reports, returned, sample }) => <div className="admin-chart-row" key={location + (sample ? "-sample" : "-live")}>
               <div><b>{location}{sample && " · Sample"}</b><span>{returned} / {reports} reunited</span></div>
               <div className="admin-chart-track"><span style={{ width: reports ? `${returned / reports * 100}%` : "0%" }} /></div>
             </div>)}</div>
             {!locations.length && <p className="admin-muted">No locations have reports yet.</p>}
           </section>
-          <aside className="admin-summary-card"><span>Campus Summary</span><h2>Verification Performance</h2><div><small>Live return rate</small><strong>{liveReturnRate}%</strong></div><div><small>Sample return rate</small><strong>{adminDemo.stats.returnRate}%</strong></div><footer><span>Live items reunited</span><b>{liveReturned}</b></footer></aside>
+          <aside className="admin-summary-card"><span>Campus Summary</span><h2>Verification Performance</h2><div><small>Live return rate</small><strong>{liveReturnRate}%</strong></div><div><small>Sample return rate</small><strong>{adminDemo.stats.returnRate}%</strong></div><footer><span>Live returned items</span><b>{liveReturned}</b></footer></aside>
         </div>}
         {view === "settings" && <div className="admin-settings">
           <section className="admin-card admin-record-list"><h2>Custody Desks</h2>

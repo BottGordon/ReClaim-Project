@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import httpx
 
-from common import ApiError, PASSWORD_RULE, clean, find, identifier, required, timestamp
+from common import ApiError, PASSWORD_RULE, clean, find, identifier, phone_number, required, student_number, timestamp
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -52,6 +52,11 @@ def public_user(user):
     for key in ("accountType", "role"):
         if result.get(key) in ("PLM", "PLM Student"):
             result[key] = "PLM Resident"
+    if result.get("studentNumber"):
+        try:
+            result["studentNumber"] = student_number(result["studentNumber"])
+        except ApiError:
+            pass
     return result
 
 
@@ -64,6 +69,7 @@ class Auth:
         self.challenges = {}
         self.preverified = {}
         self.reset_verified = {}
+        self.pending_phones = {}
         self.graph_token = None
         self.graph_expires = 0
         self.production = os.getenv("NODE_ENV") == "production"
@@ -116,7 +122,66 @@ class Auth:
         auth_id = self.session(token).get("authId")
         return bool(auth_id and self.profile(auth_id).get("is_admin") is True)
 
-    def exchange_session(self, data):
+    def unique_detail(self, field, value, owner=None):
+        normalize = phone_number if field == "phone" else student_number
+        canonical = normalize(value)
+        for existing in self.users:
+            if existing is owner or not existing.get(field):
+                continue
+            try:
+                other = normalize(existing[field])
+            except ApiError:
+                continue
+            if canonical.lstrip("+") == other.lstrip("+"):
+                label = "contact number" if field == "phone" else "student number"
+                raise ApiError(409, f"That {label} is already in use.")
+        return canonical
+
+    def start_phone_change(self, user, token, data):
+        phone = self.unique_detail("phone", data.get("phone"), user)
+        current = self.pending_phones.get(user["id"])
+        if current and current["sent"] + 60 > time.monotonic():
+            raise ApiError(429, "Wait 60 seconds before requesting another code.")
+        graph_ready = all(os.getenv(f"MS_GRAPH_{key}") for key in ("TENANT_ID", "CLIENT_ID", "CLIENT_SECRET", "SENDER"))
+        supabase_id = self.session(token).get("authId")
+        use_supabase = not graph_ready and bool(supabase_id and self.public_key)
+        if use_supabase:
+            response = self.client.post(f"{self.supabase_url}/auth/v1/otp", headers={"apikey": self.public_key},
+                                        json={"email": user["email"], "create_user": False})
+            if not response.is_success:
+                raise ApiError(response.status_code if response.status_code == 429 else 502, "Could not send the email code. Try again shortly.")
+            delivery = {}
+        else:
+            delivery = self.deliver_code(user["email"], "phone-change")
+        self.pending_phones[user["id"]] = {
+            "phone": phone, "token": token, "sent": time.monotonic(), "attempts": 0,
+            "supabaseId": supabase_id if use_supabase else None,
+        }
+        return 200, {"message": "A code was sent to your account email.", **delivery}
+
+    def finish_phone_change(self, user, token, data):
+        current = self.pending_phones.get(user["id"])
+        if not current or current["token"] != token:
+            raise ApiError(400, "Request a contact change code first.")
+        phone = self.unique_detail("phone", current["phone"], user)
+        code = clean(data.get("code"), 12)
+        if current["supabaseId"]:
+            if current["sent"] + 900 < time.monotonic() or current["attempts"] >= 5:
+                del self.pending_phones[user["id"]]
+                raise ApiError(400, "That code is expired. Request a new one.")
+            current["attempts"] += 1
+            response = self.client.post(f"{self.supabase_url}/auth/v1/verify", headers={"apikey": self.public_key},
+                                        json={"email": user["email"], "token": code, "type": "email"})
+            if not response.is_success or (response.json().get("user") or {}).get("id") != current["supabaseId"]:
+                raise ApiError(400, "The verification code is incorrect or expired.")
+        else:
+            self.verify_code(user["email"], "phone-change", code)
+        user["phone"] = phone
+        self.store.save()
+        del self.pending_phones[user["id"]]
+        return 200, {"user": public_user(user)}
+
+    def verified_identity(self, data):
         if not self.public_key or not self.service_key:
             raise ApiError(503, "Supabase sign-in is not configured on the backend.")
         access_token = required(data.get("accessToken"), "Supabase access token", 16_000)
@@ -133,6 +198,24 @@ class Auth:
         auth_id = identity.get("id")
         if not auth_id or not email or not identity.get("email_confirmed_at"):
             raise ApiError(403, "Confirm your Supabase email before signing in.")
+        return identity, email, auth_id
+
+    def check_registration(self, data):
+        _, email, auth_id = self.verified_identity(data)
+        owner = find(self.users, supabaseAuthId=auth_id) or find(self.users, email=email)
+        if owner and owner.get("supabaseAuthId"):
+            raise ApiError(409, "This account is already registered.")
+        phone = self.unique_detail("phone", data.get("phone"), owner)
+        number = ""
+        if data.get("accountType") != "External User" and valid_plm_email(email):
+            if data.get("role") == "staff":
+                number = required(data.get("idNumber"), "Staff ID", 40)
+            else:
+                number = self.unique_detail("studentNumber", data.get("idNumber"), owner)
+        return 200, {"phone": phone, "idNumber": number}
+
+    def exchange_session(self, data):
+        identity, email, auth_id = self.verified_identity(data)
         profile = self.profile(auth_id)
         user = find(self.users, supabaseAuthId=auth_id)
         if user is None:
@@ -140,23 +223,32 @@ class Auth:
             metadata = identity.get("user_metadata") or {}
             if user and user.get("supabaseAuthId") and user["supabaseAuthId"] != auth_id:
                 raise ApiError(409, "This email is assigned to a different Supabase account. Delete that Auth user and try again.")
-            if user is None:
+            is_new = user is None
+            if is_new:
                 name = clean(profile.get("full_name"), 100) or clean(metadata.get("full_name"), 100) or email.split("@")[0]
                 account_type = "PLM Resident" if valid_plm_email(email) else "External User"
                 user = {
                     "id": identifier("u_"), "name": name, "email": email, "accountType": account_type,
                     "role": account_type, "emailVerified": True, "createdAt": timestamp(),
                 }
-                self.users.append(user)
-            for source, target, limit in (("full_name", "name", 100), ("student_number", "studentNumber", 40),
-                                          ("phone", "phone", 30)):
-                if metadata.get(source):
-                    user[target] = clean(metadata[source], limit)
+            details = {}
+            for key, source in (("phone", "phone"), ("studentNumber", "student_number")):
+                if not user.get(key) and metadata.get(source):
+                    if key == "studentNumber" and (not valid_plm_email(email) or metadata.get("account_type") in ("External User", "PLM Staff")):
+                        continue
+                    details[key] = self.unique_detail(key, metadata[source], user)
+            if metadata.get("staff_id") and valid_plm_email(email):
+                details["staffId"] = clean(metadata["staff_id"], 40)
+            if metadata.get("full_name"):
+                details["name"] = clean(metadata["full_name"], 100)
+            user.update(details)
             if not valid_plm_email(email) or metadata.get("account_type") == "External User":
                 user["accountType"] = "External User"
             elif user["accountType"] != "External User" and metadata.get("account_type") in ("PLM Resident", "PLM Staff"):
                 user["accountType"] = metadata["account_type"]
             user["supabaseAuthId"] = auth_id
+            if is_new:
+                self.users.append(user)
             self.store.save()
         session = self.make_session(user, auth_id)
         session["user"]["role"] = "Admin" if profile.get("is_admin") is True else user["accountType"]
@@ -196,6 +288,9 @@ class Auth:
         if purpose == "reset":
             subject = "ReClaim password reset code"
             message = f"Your ReClaim password reset code is {code}. It expires in 15 minutes. If you did not request this, ignore this email."
+        elif purpose == "phone-change":
+            subject = "Confirm your ReClaim contact number change"
+            message = f"Your ReClaim contact number change code is {code}. It expires in 15 minutes. If you did not request this, ignore this email."
         else:
             subject = "Verify your email for ReClaim"
             message = f"Your ReClaim verification code is {code}. It expires in 15 minutes. Enter it in ReClaim to continue creating your account."
@@ -248,13 +343,15 @@ class Auth:
         user = {
             "id": identifier("u_"), "name": required(data.get("name"), "Full name", 100),
             "email": email, "accountType": account_type, "role": account_type,
-            "phone": clean(data.get("phone"), 30), "passwordHash": password_hash(password),
+            "phone": self.unique_detail("phone", data.get("phone")), "passwordHash": password_hash(password),
             "emailVerified": True, "createdAt": timestamp(),
         }
         if external:
             user["school"] = clean(data.get("school"), 120)
-        else:
+        elif account_type == "PLM Staff":
             user["staffId"] = required(data.get("idNumber"), "Staff ID", 40)
+        else:
+            user["studentNumber"] = self.unique_detail("studentNumber", data.get("idNumber"))
         self.users.append(user)
         self.store.save()
         del self.preverified[email]

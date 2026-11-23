@@ -1,4 +1,4 @@
-from common import ApiError, clean, display_date, find, identifier, required, timestamp
+from common import ApiError, clean, display_date, find, identifier, phone_number, required, timestamp
 from records import next_id
 
 
@@ -35,7 +35,7 @@ class GuestReports:
             "id": next_id(self.records.items), "status": kind, "guestKind": kind, "guestReport": True,
             "ownerId": user["id"], "reporter": required(data.get("contactName"), "Contact name", 100),
             "reporterRole": "External User", "guestEmail": user["email"],
-            "guestPhone": clean(data.get("phone"), 30), "image": "",
+            "guestPhone": phone_number(data["phone"]) if clean(data.get("phone")) else "", "image": "",
             "name": required(data.get("name"), "Item name", 120),
             "category": required(data.get("category"), "Category", 50),
             "location": required(data.get("location"), "Location", 160),
