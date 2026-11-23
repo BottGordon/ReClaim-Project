@@ -23,7 +23,10 @@ def load_environment():
 
 class Store:
     def __init__(self, client=None):
-        self.remote = os.getenv("RECLAIM_STORAGE") == "supabase"
+        mode = os.getenv("RECLAIM_STORAGE") or ("supabase" if os.getenv("RENDER") == "true" and os.getenv("IS_PULL_REQUEST") != "true" else "file")
+        if mode not in ("supabase", "file"):
+            raise RuntimeError("RECLAIM_STORAGE must be supabase or file.")
+        self.remote = mode == "supabase"
         self.client = client
         self.revision = None
         if self.remote:

@@ -75,6 +75,7 @@ class Service:
         routes = [
             ("GET", r"/api/health", None, False, lambda *_: (200, {
                 "ok": True, "service": "reclaim-api", "custodyDeskCount": len(records.desks), "guestReports": True,
+                "storage": "supabase" if records.store.remote else "file",
             })),
             ("POST", r"/api/auth/supabase-session", None, True, lambda u, t, m, d: auth.exchange_session(d)),
             ("POST", r"/api/auth/registration-details", None, True, lambda u, t, m, d: auth.check_registration(d)),
