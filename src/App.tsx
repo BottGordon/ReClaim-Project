@@ -1,4 +1,5 @@
 import { AdminConsole } from "./AdminConsole"
+import { GuestWorkspace } from "./GuestWorkspace"
 import { AccountAvatar } from "./AccountAvatar"
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -1702,6 +1703,10 @@ export default function App() {
       setIsAdmin(false)
       setPage("browse")
     }} />
+  }
+
+  if (currentUser.accountType === "External User") {
+    return <GuestWorkspace user={currentUser} brand={<Logo />} onSignOut={signOut} />
   }
 
   return (

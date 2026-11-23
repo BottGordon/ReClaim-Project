@@ -4,7 +4,7 @@ import { adminDemo, combineAdminRecords } from "./lib/adminDemo"
 import { AccountAvatar } from "./AccountAvatar"
 import {
   adminLinkMatch, adminLogWalkIn, adminMessageClaimant, adminModerate, adminOverview,
-  adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, setNotificationRead,
+  adminReplyToGuest, adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, adminVerifyGuestHandover, setNotificationRead,
   type AdminOverview, type ApiClaim, type ApiItem, type ApiUser,
 } from "./lib/api"
 
@@ -144,6 +144,16 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const activeReports = data?.stats.activeReports ?? items.filter((item) => item.status !== "Returned" && item.privacy !== "Held").length
   const notifications = data?.notifications ?? []
   const deskActivity = [
+    ...(liveData?.items ?? []).flatMap((item) => {
+      if (!item.guestReport || item.status === "Returned") return []
+      const last = item.guestMessages?.at(-1)
+      return [{
+        key: last?.sender === "Guest" ? last.id : `guest-${item.id}`,
+        title: `${last?.sender === "Guest" ? "Guest Message" : "Guest Report"} · ${ticket(item.id)}`,
+        text: `${item.reporter} · ${item.name}`,
+        selection: { type: "item", id: item.id } as const,
+      }]
+    }),
     ...(liveData?.claims ?? []).filter((claim) => claim.status === "Pending").map((claim) => ({
       key: `claim-${claim.id}`, title: `New Claim on ${ticket(claim.itemId)}`,
       text: `${claim.claimant} submitted an ownership claim for ${itemById.get(claim.itemId)?.name ?? "this item"}.`,
@@ -533,6 +543,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               {selectedItem.image && <img src={selectedItem.image} alt={selectedItem.name} />}
               <p><b>Custody</b> {custody(selectedItem)}{selectedItem.shelfTag && ` · ${selectedItem.shelfTag}`}</p>
               <p><b>Reported by</b> {selectedItem.reporter} · {selectedItem.reporterRole}</p>
+              {selectedItem.guestReport && <p><b>Guest contact</b> {selectedItem.guestEmail}{selectedItem.guestPhone && ` · ${selectedItem.guestPhone}`}</p>}
               {selectedItem.privateNotes && <p><b>Private notes</b> {selectedItem.privateNotes}</p>}
             </section>
             {canChangeCustody && <form className="admin-form" onSubmit={submit((form) =>
@@ -543,14 +554,41 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               <label>Shelf tag<input name="shelfTag" defaultValue={selectedItem.shelfTag} maxLength={120} /></label>
               <button className="admin-refresh" disabled={writeDisabled}>Save custody</button>
             </form>}
-            {selectedItem.privacy === "Held" ? <form className="admin-form" onSubmit={submit((form) => publishRedactedReport(selectedItem, form))}>
+            {selectedItem.guestReport && <>
+              <div className="admin-record-list">
+                <h2>Guest correspondence</h2>
+                {selectedItem.guestMessages?.map((message) => <article key={message.id}>
+                  <div><b>{message.sender === "Desk" ? "Campus desk" : selectedItem.reporter}</b><p className="whitespace-pre-wrap">{message.text}</p></div>
+                </article>)}
+              </div>
+              <form className="admin-form" onSubmit={submit((form) => void run(() => adminReplyToGuest(selectedItem.id, field(form, "text")), "Reply sent."))}>
+                <label>Reply to guest<textarea name="text" maxLength={2000} required /></label>
+                <button className="claim-approve" disabled={recordWriteDisabled}>Send reply</button>
+              </form>
+              {selectedItem.status === "Lost" && <form className="admin-form" onSubmit={submit((form) => void run(
+                () => adminVerifyGuestHandover(selectedItem.id, field(form, "foundId"), form.has("idVerified"), form.has("ownershipVerified")),
+                "Verified guest handover recorded.",
+              ))}>
+                <h2>Verify guest handover</h2>
+                <label>Recovered item<select name="foundId" required defaultValue="">
+                  <option value="" disabled>Select a found report</option>
+                  {(liveData?.items ?? []).filter((item) => item.status === "Found" && item.category === selectedItem.category &&
+                    item.ownerId !== selectedItem.ownerId && !claims.some((claim) => claim.itemId === item.id && (claim.status === "Pending" || claim.status === "Approved")))
+                    .map((item) => <option value={item.id} key={item.id}>{ticket(item.id)} · {item.name}</option>)}
+                </select></label>
+                <label className="flex! flex-row! items-center gap-2"><input type="checkbox" name="idVerified" required /> Valid identification checked</label>
+                <label className="flex! flex-row! items-center gap-2"><input type="checkbox" name="ownershipVerified" required /> Proof of ownership checked</label>
+                <button className="claim-approve" disabled={recordWriteDisabled}>Record handover</button>
+              </form>}
+            </>}
+            {!selectedItem.guestReport && (selectedItem.privacy === "Held" ? <form className="admin-form" onSubmit={submit((form) => publishRedactedReport(selectedItem, form))}>
               <h3>Privacy Review</h3>
               <p>{selectedIsSample ? "Practice redacting the public text. Sample publishing stays in this walkthrough." : "Remove sensitive details from the public text. Publishing removes the original photo from the feed."}</p>
               <label>Redacted title<input name="name" defaultValue={selectedItem.name} required maxLength={120} /></label>
               <label>Redacted description<textarea name="description" defaultValue={selectedItem.description} required maxLength={1500} /></label>
               {selectedItem.question && <label>Public ownership question<input name="question" defaultValue={selectedItem.question} required maxLength={200} /></label>}
               <button className="btn-primary" disabled={writeDisabled}>{selectedIsSample ? "Publish redacted sample" : "Publish redacted report"}</button>
-            </form> : !selectedIsSample && <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminModerate(selectedItem.id, { action: "hold" }), "Report held for privacy review.")}>Hold for privacy review</button>}
+            </form> : !selectedIsSample && <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => adminModerate(selectedItem.id, { action: "hold" }), "Report held for privacy review.")}>Hold for privacy review</button>)}
             <div className="admin-record-list">{claims.filter((claim) => claim.itemId === selectedItem.id).map((claim) => <article key={claim.id}><b>{claim.claimant} · {claim.status}</b>
               <button className="inspect-button" onClick={() => inspect({ type: "claim", id: claim.id })}>Review claim</button>
             </article>)}</div>

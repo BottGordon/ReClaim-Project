@@ -18,6 +18,10 @@ def valid_plm_email(email):
     return re.fullmatch(r"[^\s@]+@plm\.edu\.ph", email, re.I) is not None
 
 
+def is_external(user):
+    return user["accountType"] == "External User" or not valid_plm_email(user["email"])
+
+
 def email_from(data, error="Enter a valid email address."):
     email = required(data.get("email"), "Email", 254).lower()
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
@@ -145,11 +149,13 @@ class Auth:
                 }
                 self.users.append(user)
             for source, target, limit in (("full_name", "name", 100), ("student_number", "studentNumber", 40),
-                                          ("phone", "phone", 30), ("account_type", "accountType", 40)):
+                                          ("phone", "phone", 30)):
                 if metadata.get(source):
                     user[target] = clean(metadata[source], limit)
-            if metadata.get("account_type") and user["accountType"] in ("PLM", "PLM Student"):
-                user["accountType"] = "PLM Resident"
+            if not valid_plm_email(email) or metadata.get("account_type") == "External User":
+                user["accountType"] = "External User"
+            elif user["accountType"] != "External User" and metadata.get("account_type") in ("PLM Resident", "PLM Staff"):
+                user["accountType"] = metadata["account_type"]
             user["supabaseAuthId"] = auth_id
             self.store.save()
         session = self.make_session(user, auth_id)

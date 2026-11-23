@@ -11,8 +11,9 @@ from fastapi import FastAPI, Request, Response
 from starlette.concurrency import run_in_threadpool
 
 from admin import Admin
-from auth import Auth, public_user
+from auth import Auth, is_external, public_user
 from common import ApiError, MAX_BODY_BYTES, clean
+from guest import GuestReports
 from records import Records
 from storage import Store, load_environment
 
@@ -64,6 +65,7 @@ class Service:
         self.auth = Auth(store, client)
         self.records = Records(store)
         self.admin = Admin(self.records)
+        self.guest = GuestReports(self.records)
         self.lock = Lock()
         self.routes = self.api_routes()
 
@@ -72,13 +74,16 @@ class Service:
         # Method, path, access level, JSON body, and endpoint handler.
         routes = [
             ("GET", r"/api/health", None, False, lambda *_: (200, {
-                "ok": True, "service": "reclaim-api", "custodyDeskCount": len(records.desks),
+                "ok": True, "service": "reclaim-api", "custodyDeskCount": len(records.desks), "guestReports": True,
             })),
             ("POST", r"/api/auth/supabase-session", None, True, lambda u, t, m, d: auth.exchange_session(d)),
             ("POST", r"/api/auth/login", None, True, lambda u, t, m, d: auth.login(d)),
             ("POST", r"/api/auth/logout", None, False, self.logout),
-            ("GET", r"/api/auth/me", "user", False, lambda u, *_: (200, {"user": public_user(u)})),
-            ("GET", r"/api/bootstrap", "user", False, self.bootstrap),
+            ("GET", r"/api/auth/me", "account", False, lambda u, *_: (200, {"user": public_user(u)})),
+            ("GET", r"/api/bootstrap", "account", False, self.bootstrap),
+            ("GET", r"/api/guest/reports", "guest", False, lambda u, *_: self.guest.list(u)),
+            ("POST", r"/api/guest/reports", "guest", True, lambda u, t, m, d: self.guest.submit(u, d)),
+            ("POST", r"/api/guest/reports/([0-9]+)/messages", "guest", True, lambda u, t, m, d: self.guest.message(u, m[1], d)),
             ("GET", r"/api/items", "user", False, lambda u, *_: (200, {"items": records.visible_items(u)})),
             ("POST", r"/api/items", "user", True, lambda u, t, m, d: records.create_item(u, d)),
             ("POST", r"/api/items/([0-9]+)/verify-answer", "user", True, lambda u, t, m, d: records.verify_answer(u, m[1], d)),
@@ -92,7 +97,9 @@ class Service:
             ("PATCH", r"/api/conversations/([0-9]+)/read", "user", False, lambda u, t, m, d: records.update_conversation(u, int(m[1]), d, True)),
             ("PATCH", r"/api/profile", "user", True, self.update_profile),
             ("PUT", r"/api/profile/password", "user", True, lambda u, t, m, d: auth.change_password(u, t, d)),
-            ("GET", r"/api/admin/overview", "admin", False, lambda u, *_: admin.overview(u)),
+            ("GET", r"/api/admin/overview", "admin", False, self.admin_overview),
+            ("POST", r"/api/admin/guest-reports/([0-9]+)/messages", "admin", True, lambda u, t, m, d: self.guest.message(u, m[1], d, admin=True)),
+            ("POST", r"/api/admin/guest-reports/([0-9]+)/handover", "admin", True, lambda u, t, m, d: self.guest.handover(u, m[1], d)),
             ("POST", r"/api/admin/items", "admin", True, lambda u, t, m, d: admin.log_walk_in(u, d)),
             ("PATCH", r"/api/admin/claims/([0-9]+)", "admin", True, lambda u, t, m, d: admin.update_claim(u, int(m[1]), d, False)),
             ("POST", r"/api/admin/claims/([0-9]+)/messages", "admin", True, lambda u, t, m, d: admin.update_claim(u, int(m[1]), d, True)),
@@ -114,8 +121,17 @@ class Service:
     def bootstrap(self, user, token, match, data):
         admin = self.auth.is_admin(token)
         profile = public_user(user)
-        profile["role"] = "Admin" if admin else user["accountType"]
-        return 200, {"isAdmin": admin, "user": profile, **self.records.bootstrap(user)}
+        external = is_external(user)
+        if external:
+            profile["accountType"] = "External User"
+        profile["role"] = "Admin" if admin else profile["accountType"]
+        workspace = {"items": [], "claims": [], "conversations": [], "notifications": []} if external else self.records.bootstrap(user)
+        return 200, {"isAdmin": admin, "user": profile, **workspace}
+
+    def admin_overview(self, user, *_):
+        status, overview = self.admin.overview(user)
+        overview["items"] = [self.guest.admin_item(item) for item in overview["items"]]
+        return status, overview
 
     def update_profile(self, user, token, match, data):
         if "photo" in data:
@@ -132,7 +148,7 @@ class Service:
                 return access, uses_body, handler, match
         if path.startswith("/api/admin/"):
             return "admin", False, lambda *_: (404, {"error": "Admin endpoint not found."}), None
-        return "user", False, lambda *_: (404, {"error": "Endpoint not found."}), None
+        return "account", False, lambda *_: (404, {"error": "Endpoint not found."}), None
 
     def authorize(self, token, access):
         if access is None:
@@ -140,6 +156,10 @@ class Service:
         user = self.auth.require_user(token)
         if access == "admin" and not self.auth.is_admin(token):
             raise ApiError(403, "Administrator access is required.", "ADMIN_REQUIRED")
+        if access == "user" and is_external(user):
+            raise ApiError(403, "External accounts can submit and track their own reports.", "EXTERNAL_RESTRICTED")
+        if access == "guest" and not is_external(user):
+            raise ApiError(403, "This workspace is for external accounts.")
         return user
 
     def check_session(self, token):

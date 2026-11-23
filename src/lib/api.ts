@@ -44,7 +44,18 @@ export type ApiItem = {
   shelfTag?: string
   privacy?: "Held" | "Published"
   privateNotes?: string
+  guestReport?: boolean
+  guestEmail?: string
+  guestPhone?: string
+  guestMessages?: GuestMessage[]
   originalContent?: Pick<ApiItem, "name" | "description" | "image" | "question">
+}
+
+export type GuestMessage = { id: string; sender: "Desk" | "Guest"; text: string; createdAt: string }
+export type GuestReport = Pick<ApiItem, "id" | "name" | "category" | "status" | "date" | "location" | "description"> & {
+  reference: string
+  kind: "Lost" | "Found"
+  messages: GuestMessage[]
 }
 
 export type ApiClaim = {
@@ -293,6 +304,26 @@ export function bootstrap() {
 
 export function adminOverview() {
   return request<AdminOverview>("/admin/overview")
+}
+
+export function guestReports() {
+  return request<{ reports: GuestReport[] }>("/guest/reports")
+}
+
+export function submitGuestReport(input: Record<string, string>) {
+  return request<{ report: GuestReport }>("/guest/reports", { method: "POST", body: JSON.stringify(input) })
+}
+
+export function messageGuestDesk(id: number, text: string) {
+  return request<{ report: GuestReport }>(`/guest/reports/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) })
+}
+
+export function adminReplyToGuest(id: number, text: string) {
+  return adminWrite(`/guest-reports/${id}/messages`, "POST", { text })
+}
+
+export function adminVerifyGuestHandover(id: number, foundId: string, idVerified: boolean, ownershipVerified: boolean) {
+  return adminWrite(`/guest-reports/${id}/handover`, "POST", { foundId, idVerified, ownershipVerified })
 }
 
 export function adminUpdateClaim(id: number, status: "Approved" | "Rejected") {

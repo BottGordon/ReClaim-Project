@@ -1,5 +1,6 @@
 import re
 
+from auth import is_external
 from common import ApiError, MAX_BODY_BYTES, clean, display_date, find, identifier, item_id, json_truth, milliseconds, required, timestamp
 
 OPEN_STATUSES = ("Found", "Pending Claim")
@@ -27,7 +28,7 @@ def visible_item(item, user):
     item = normalize_image(item)
     if item["ownerId"] == user["id"]:
         return item
-    return {key: value for key, value in item.items() if key not in ("answer", "privateNotes", "originalContent")}
+    return {key: value for key, value in item.items() if key not in ("answer", "privateNotes", "originalContent", "guestHandover")}
 
 
 def open_found(item):
@@ -62,12 +63,22 @@ class Records:
     def item(self, value):
         return find(self.items, id=item_id(value))
 
+    def external_user(self, user_id):
+        user = find(self.users, id=user_id)
+        return bool(user and is_external(user))
+
+    def is_guest_report(self, item):
+        return bool(item and (item.get("guestReport") or self.external_user(item.get("ownerId"))))
+
+    def direct_thread(self, thread):
+        return not any(self.external_user(user_id) for user_id in thread["participantIds"]) and not self.is_guest_report(self.item(thread["itemId"]))
+
     def inbox(self, user):
         return [entry for entry in self.notifications if entry["userId"] == user["id"]]
 
     def visible_items(self, user, newest_first=False):
         items = sorted(self.items, key=lambda item: item.get("createdAt", ""), reverse=True) if newest_first else self.items
-        return [visible for item in items if (visible := visible_item(item, user)) is not None]
+        return [visible for item in items if not self.is_guest_report(item) and (visible := visible_item(item, user)) is not None]
 
     def notify(self, user_id, kind, title, text, target):
         self.notifications.insert(0, {
@@ -85,7 +96,7 @@ class Records:
             ],
             "conversations": [
                 self.conversation_view(thread, user_id)
-                for thread in self.conversations if user_id in thread["participantIds"]
+                for thread in self.conversations if user_id in thread["participantIds"] and self.direct_thread(thread)
             ],
             "notifications": self.inbox(user),
         }
@@ -127,7 +138,7 @@ class Records:
 
     def claimable_item(self, user, value):
         item = self.item(value)
-        if not open_found(item):
+        if not open_found(item) or self.is_guest_report(item):
             raise ApiError(404, "This found item is no longer available to claim.")
         if item["ownerId"] == user["id"]:
             raise ApiError(400, "You cannot claim your own report.")
@@ -195,6 +206,8 @@ class Records:
         claim, item = self.claim_and_item(value)
         if item["ownerId"] != user["id"]:
             raise ApiError(403, "Only the item reporter can review this claim.")
+        if self.external_user(claim["claimantId"]):
+            raise ApiError(403, "The campus desk must review claims from external users.")
         self.review_claim(claim, item, data.get("status"))
         self.store.save()
         return 200, {"claim": claim, "item": item}
@@ -204,6 +217,8 @@ class Records:
             return
         if item["status"] != "Claimed" or not item.get("approvedClaimantId"):
             raise ApiError(409, "Approve an ownership claim before recording the handover.")
+        if self.is_guest_report(item) or self.external_user(item["approvedClaimantId"]):
+            raise ApiError(409, "Use the guest report to verify this handover.")
         claims = [claim for claim in self.claims if claim["itemId"] == item["id"]]
         item["returnClaimSnapshot"] = {str(claim["id"]): claim["status"] for claim in claims}
         item["status"] = "Returned"
@@ -216,6 +231,8 @@ class Records:
 
     def update_return(self, user, value, undo):
         item = self.item(value)
+        if item and item.get("guestHandover"):
+            raise ApiError(409, "The campus desk recorded this handover.")
         if undo:
             if not item or item["ownerId"] != user["id"] or item["status"] != "Returned":
                 raise ApiError(403, "Only the finder can undo a return for their returned item.")
@@ -261,7 +278,7 @@ class Records:
 
     def start_conversation(self, user, data):
         item = self.item(data.get("itemId"))
-        if not visible_item(item, user):
+        if self.is_guest_report(item) or not visible_item(item, user):
             raise ApiError(404, "Item not found.")
         if item["ownerId"] == user["id"]:
             raise ApiError(400, "You cannot message yourself.")
@@ -280,7 +297,7 @@ class Records:
     def update_conversation(self, user, value, data, read):
         user_id = user["id"]
         thread = find(self.conversations, id=value)
-        if not thread or user_id not in thread["participantIds"]:
+        if not thread or user_id not in thread["participantIds"] or not self.direct_thread(thread):
             raise ApiError(404, "Conversation not found.")
         if read:
             for message in thread["messages"]:

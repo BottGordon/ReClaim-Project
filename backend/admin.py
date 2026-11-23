@@ -17,6 +17,7 @@ class Admin:
     def can_match(self, lost, found):
         return (
             lost and lost["status"] == "Lost" and lost.get("privacy") != "Held" and open_found(found)
+            and not self.records.is_guest_report(lost) and not self.records.is_guest_report(found)
             and lost["category"] == found["category"] and lost["ownerId"] != found["ownerId"]
             and find(self.records.users, id=lost["ownerId"])
         )
@@ -82,6 +83,9 @@ class Admin:
     def update_claim(self, user, value, data, send_message):
         records = self.records
         claim, item = records.claim_and_item(value)
+        external = records.external_user(claim["claimantId"]) or records.is_guest_report(item)
+        if external and (send_message or data.get("status") == "Approved"):
+            raise ApiError(409, "Use the guest report to coordinate and verify this handover.")
         if send_message:
             text = required(data.get("text"), "Message", 2000)
             claimant = claim["claimantId"]
