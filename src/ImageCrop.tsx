@@ -4,17 +4,18 @@ import { createPortal } from "react-dom"
 export function useImageCrop() {
   const [selection, setSelection] = useState<{
     source: string
+    maxDimension?: number
     onApply: (photo: string) => void | Promise<void>
   }>()
   const request = useRef(0)
 
   useEffect(() => () => { request.current++ }, [])
 
-  function chooseImage(file: File, onApply: (photo: string) => void | Promise<void>, onError: (message: string) => void) {
+  function chooseImage(file: File, onApply: (photo: string) => void | Promise<void>, onError: (message: string) => void, maxDimension?: number) {
     const version = ++request.current
     const reader = new FileReader()
     reader.onload = () => {
-      if (version === request.current) setSelection({ source: String(reader.result), onApply })
+      if (version === request.current) setSelection({ source: String(reader.result), onApply, maxDimension })
     }
     reader.onerror = () => {
       if (version === request.current) onError("Could not read that photo.")
@@ -25,14 +26,15 @@ export function useImageCrop() {
   return {
     chooseImage,
     cropDialog: selection && createPortal(
-      <ImageCrop source={selection.source} onApply={selection.onApply} onClose={() => setSelection(undefined)} />,
+      <ImageCrop source={selection.source} maxDimension={selection.maxDimension} onApply={selection.onApply} onClose={() => setSelection(undefined)} />,
       document.body,
     ),
   }
 }
 
-function ImageCrop({ source, onApply, onClose }: {
+function ImageCrop({ source, maxDimension, onApply, onClose }: {
   source: string
+  maxDimension?: number
   onApply: (photo: string) => void | Promise<void>
   onClose: () => void
 }) {
@@ -55,19 +57,29 @@ function ImageCrop({ source, onApply, onClose }: {
     void onApply(photo)
   }
 
-  function crop() {
+  function saveImage(cropped: boolean) {
     if (!image.current || !side) return
+    if (!cropped && !maxDimension) {
+      apply(source)
+      return
+    }
+
+    const sourceWidth = cropped ? side : width
+    const sourceHeight = cropped ? side : height
+    const scale = Math.min(1, (maxDimension ?? 1200) / Math.max(sourceWidth, sourceHeight))
     const canvas = document.createElement("canvas")
-    canvas.width = canvas.height = Math.max(1, Math.min(1200, Math.round(side)))
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale))
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale))
     const context = canvas.getContext("2d", { alpha: false })
     if (!context) {
-      setError("Could not crop the photo. You can use the original.")
+      setError("Could not prepare the photo. Try another image.")
       return
     }
     context.fillStyle = "white"
     context.fillRect(0, 0, canvas.width, canvas.height)
-    context.drawImage(image.current, x, y, side, side, 0, 0, canvas.width, canvas.height)
-    apply(canvas.toDataURL("image/jpeg", 0.9))
+    context.drawImage(image.current, cropped ? x : 0, cropped ? y : 0,
+      sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height)
+    apply(canvas.toDataURL("image/jpeg", maxDimension ? 0.82 : 0.9))
   }
 
   return (
@@ -91,8 +103,8 @@ function ImageCrop({ source, onApply, onClose }: {
       {error && <p role="alert" className="form-error mt-3">{error}</p>}
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         <button type="button" className="btn-small" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn-small" disabled={!side} onClick={() => apply(source)}>Use original</button>
-        <button type="button" className="btn-small" disabled={!side} onClick={crop}>Use crop</button>
+        <button type="button" className="btn-small" disabled={!side} onClick={() => saveImage(false)}>{maxDimension ? "Use full photo" : "Use original"}</button>
+        <button type="button" className="btn-small" disabled={!side} onClick={() => saveImage(true)}>Use crop</button>
       </div>
     </dialog>
   )

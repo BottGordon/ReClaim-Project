@@ -3311,11 +3311,13 @@ function Profile({
                   await onSave(photo)
                   notify("Profile photo updated.")
                 } catch (cause) {
-                  setPhotoError(cause instanceof Error ? cause.message : "Could not save photo.")
+                  setPhotoError([502, 503, 504].includes((cause as { status?: number })?.status ?? 0)
+                    ? "The photo service is temporarily unavailable. Try uploading again in a moment."
+                    : cause instanceof Error ? cause.message : "Could not save photo.")
                 } finally {
                   setSavingPhoto(false)
                 }
-              }, setPhotoError)
+              }, setPhotoError, 512)
             }} />
             <button type="button" disabled={savingPhoto} onClick={() => photoRef.current?.click()} aria-label="Edit profile photo">
               <Camera size={15} />
