@@ -29,6 +29,7 @@ class Store:
         self.remote = mode == "supabase"
         self.client = client
         self.revision = None
+        self.needs_reload = False
         if self.remote:
             url = os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL")
             key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -67,14 +68,39 @@ class Store:
         self.revision = rows[0]["revision"]
         return rows[0]["payload"]
 
+    def reload_after_failed_save(self):
+        if not self.needs_reload:
+            return
+        saved = self.load_remote()
+        if saved is None:
+            raise ApiError(503, "Could not reload the persistent ReClaim records. Try again shortly.")
+        self.restore(saved)
+        self.snapshot = json.dumps(self.data, allow_nan=False)
+        self.needs_reload = False
+
+    def restore(self, saved):
+        # Auth and Records retain references to the workspace lists.
+        for key, value in list(self.data.items()):
+            if isinstance(value, list):
+                value[:] = saved.get(key, [])
+            elif key not in saved:
+                del self.data[key]
+        for key, value in saved.items():
+            if not isinstance(self.data.get(key), list):
+                self.data[key] = value
+
     def save_remote(self):
         revision = 1 if self.revision is None else self.revision + 1
         payload = {"revision": revision, "payload": self.data}
+        # Return only the revision so PostgREST does not send the workspace and its images back.
+        params = {"select": "revision"}
         if self.revision is None:
-            response = self.client.post(self.endpoint, headers=self.headers, json={"id": "workspace", **payload})
+            response = self.client.post(self.endpoint, headers=self.headers, json={"id": "workspace", **payload},
+                                        params=params, timeout=30)
         else:
+            params.update({"id": "eq.workspace", "revision": f"eq.{self.revision}"})
             response = self.client.patch(self.endpoint, headers=self.headers, json=payload,
-                                         params={"id": "eq.workspace", "revision": f"eq.{self.revision}"})
+                                         params=params, timeout=30)
         if not response.is_success or not response.json():
             raise ApiError(503, "Could not save the persistent ReClaim records. Try again shortly.")
         self.revision = revision
@@ -117,8 +143,6 @@ class Store:
                 temporary.replace(self.file)
             self.snapshot = snapshot
         except Exception:
-            saved = json.loads(self.snapshot)
-            for key, value in self.data.items():
-                if isinstance(value, list):
-                    value[:] = saved[key]
+            self.restore(json.loads(self.snapshot))
+            self.needs_reload = self.remote
             raise

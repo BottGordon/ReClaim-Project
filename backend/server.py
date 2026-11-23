@@ -76,6 +76,7 @@ class Service:
             ("GET", r"/api/health", None, False, lambda *_: (200, {
                 "ok": True, "service": "reclaim-api", "custodyDeskCount": len(records.desks), "guestReports": True,
                 "storage": "supabase" if records.store.remote else "file",
+                "revision": os.getenv("RENDER_GIT_COMMIT", "")[:7],
             })),
             ("POST", r"/api/auth/supabase-session", None, True, lambda u, t, m, d: auth.exchange_session(d)),
             ("POST", r"/api/auth/registration-details", None, True, lambda u, t, m, d: auth.check_registration(d)),
@@ -186,6 +187,7 @@ class Service:
         # Keep authorization, state changes and response serialization consistent
         # when the ASGI server handles multiple requests at once.
         with self.lock:
+            self.records.store.reload_after_failed_save()
             user = self.authorize(token, access)
             if isinstance(data, ApiError):
                 raise data
