@@ -1597,6 +1597,7 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [restoringSession, setRestoringSession] = useState(true)
   const [sessionError, setSessionError] = useState("")
+  const [waitingForApi, setWaitingForApi] = useState(false)
   const [restoreAttempt, setRestoreAttempt] = useState(0)
   const workspaceRequest = useRef(0)
   const workspaceApplied = useRef(0)
@@ -1683,7 +1684,22 @@ export default function App() {
 
   useEffect(() => {
     let active = true
-    void bootstrap().then((data) => {
+    async function restoreWorkspace() {
+      // Render may briefly return a gateway error while the API wakes up.
+      for (const delay of [2000, 4000, 8000, 12000, 15000, 19000]) {
+        try {
+          return await bootstrap()
+        } catch (failure) {
+          const status = (failure as { status?: number })?.status
+          if (!active || (status !== 502 && status !== 503 && status !== 504)) throw failure
+          setWaitingForApi(true)
+          await new Promise((resolve) => window.setTimeout(resolve, delay))
+          if (!active) throw failure
+        }
+      }
+      return bootstrap()
+    }
+    void restoreWorkspace().then((data) => {
       if (active) applyWorkspace(data, true)
     }).catch((failure) => {
       if (!active) return
@@ -1742,7 +1758,7 @@ export default function App() {
   if (restoringSession) return <p role="status" className="p-6">Checking your session…</p>
   if (sessionError) return <section className="p-6">
     <p className="form-error" role="alert">{sessionError}</p>
-    <button className="btn-secondary mt-4" onClick={() => { setSessionError(""); setRestoringSession(true); setRestoreAttempt((attempt) => attempt + 1) }}>Retry</button>
+    <button className="btn-secondary mt-4" onClick={() => { setSessionError(""); setWaitingForApi(false); setRestoringSession(true); setRestoreAttempt((attempt) => attempt + 1) }}>Retry</button>
   </section>
 
   if (!currentUser)

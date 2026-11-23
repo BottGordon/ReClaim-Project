@@ -154,7 +154,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    const error = new Error(data.error || `Request failed (${response.status}).`) as ApiError
+    const gatewayError = [502, 503, 504].includes(response.status)
+    const fallback = gatewayError ? "ReClaim is temporarily unavailable. Please try again shortly." : `Request failed (${response.status}).`
+    const error = new Error(data.error || fallback) as ApiError
     error.status = response.status
     error.code = data.code
     throw error
