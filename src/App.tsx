@@ -1,3 +1,4 @@
+import { useImageCrop } from "./ImageCrop"
 import { AdminConsole } from "./AdminConsole"
 import { GuestWorkspace } from "./GuestWorkspace"
 import { PhoneSettings, phoneInput, phonePattern, studentInput } from "./PhoneSettings"
@@ -65,7 +66,6 @@ import {
   MessageCircle,
   PackageCheck,
   Package,
-  Pencil,
   Plus,
   Search,
   ShieldAlert,
@@ -940,9 +940,11 @@ function Auth({ onLogin }: { onLogin: () => Promise<void> }) {
     finally { setBusy(false) }
   }
 
-  if (view === "signup") return <SignupFlow onDone={async (email) => {
-    if (!email) { setSuccessMessage(""); setView("login"); return }
-    await onLogin()
+  if (view === "signup") return <SignupFlow onDone={(email) => {
+    setError("")
+    setShowPassword(false)
+    setSuccessMessage(email ? "Account created. Sign in with your email and password." : "")
+    setView("login")
   }} />
 
   if (view === "home") {
@@ -1656,16 +1658,10 @@ export default function App() {
     if (!pendingPhotoSave.current) await refreshWorkspace(false, signal)
   })
 
-  function updateProfilePhoto(file: File) {
+  function updateProfilePhoto(photo: string) {
     if (pendingPhotoSave.current) return pendingPhotoSave.current
     const generation = accountGeneration.current
     const operation = (async () => {
-      const photo = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(String(reader.result))
-        reader.onerror = () => reject(new Error("Could not read the profile photo."))
-        reader.readAsDataURL(file)
-      })
       let user
       try {
         user = await saveProfile({ photo })
@@ -2224,6 +2220,7 @@ function ReportForm({
 }) {
   const [kind, setKind] = useState<"Lost" | "Found">("Lost")
   const [rewardType, setRewardType] = useState<RewardType>("none")
+  const { chooseImage, cropDialog } = useImageCrop()
   const [preview, setPreview] = useState("")
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState("")
@@ -2269,6 +2266,7 @@ function ReportForm({
         title="What happened?"
         text="Share clear details to help the right person recognize and recover the item."
       />
+      {cropDialog}
       <form onSubmit={submit} className="form-card">
         <div className="report-choice">
           <button
@@ -2437,17 +2435,15 @@ function ReportForm({
             accept="image/*"
             className="hidden"
             onChange={(event) => {
-              const file = event.target.files?.[0]
+              const file = event.currentTarget.files?.[0]
+              event.currentTarget.value = ""
               if (!file) return
               if (file.size > MAX_IMAGE_BYTES || !["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
                 setSaveError("Choose a PNG, JPEG, WebP, or GIF photo up to 5 MB.")
-                event.target.value = ""
                 return
               }
               setSaveError("")
-              const reader = new FileReader()
-              reader.onload = () => setPreview(String(reader.result || ""))
-              reader.readAsDataURL(file)
+              chooseImage(file, setPreview, setSaveError)
             }}
           />
           <button
@@ -2520,6 +2516,7 @@ function ItemModal({
   )
   const [answer, setAnswer] = useState("")
   const [proof, setProof] = useState("")
+  const { chooseImage, cropDialog } = useImageCrop()
   const [proofError, setProofError] = useState("")
   const [explanation, setExplanation] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -2531,6 +2528,7 @@ function ItemModal({
         if (event.target === event.currentTarget) onClose()
       }}
     >
+      {cropDialog}
       <div className="item-modal">
         <button className="modal-close" onClick={onClose} aria-label="Close">
           <X size={20} />
@@ -2692,7 +2690,8 @@ function ItemModal({
                   className="hidden"
                   onChange={async (event) => {
                     const input = event.currentTarget
-                    const file = event.target.files?.[0]
+                    const file = input.files?.[0]
+                    input.value = ""
                     if (!file) return
                     setProofError("")
                     if (file.size > MAX_IMAGE_BYTES) {
@@ -2700,7 +2699,6 @@ function ItemModal({
                       setProofError(
                         "The photo must be 5 MB or smaller.",
                       )
-                      input.value = ""
                       return
                     }
                     const extensionIsValid = /\.(jpe?g)$/i.test(file.name)
@@ -2720,13 +2718,9 @@ function ItemModal({
                       setProofError(
                         "Invalid file format. Please upload a JPG or JPEG image only.",
                       )
-                      input.value = ""
                       return
                     }
-                    const reader = new FileReader()
-                    reader.onload = () => setProof(String(reader.result || ""))
-                    reader.onerror = () => setProofError("Could not read that photo.")
-                    reader.readAsDataURL(file)
+                    chooseImage(file, setProof, setProofError)
                   }}
                 />
                 {proof ? (
@@ -2860,11 +2854,7 @@ function Activity({
                   </button>
                 ) : item.status === "Returned" ? (
                   <button className="btn-small" onClick={(event) => { event.stopPropagation(); onUndoReturned(item.id) }}>Undo return</button>
-                ) : (
-                  <button className="icon-button">
-                    <Pencil size={16} />
-                  </button>
-                )
+                ) : undefined
               }
             />
           ))}
@@ -2940,33 +2930,36 @@ function ActivityRow({
 }: {
   item: Item
   onSelect: (item: Item) => void
-  extra: React.ReactNode
+  extra?: React.ReactNode
 }) {
   return (
-    <button className="activity-row" onClick={() => onSelect(item)}>
-      <img src={itemImageSource(item.image)} alt="" onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
-      <div className="min-w-0 flex-1 text-left">
-        <div className="flex items-center gap-2">
-          <h3>{item.name}</h3>
-          <StatusBadge status={item.status} />
+    <div className="activity-row">
+      <button type="button" className="activity-details" aria-label={`View details for ${item.name}`} onClick={() => onSelect(item)}>
+        <img src={itemImageSource(item.image)} alt="" onError={(event) => replaceBrokenItemImage(event.currentTarget, item)} />
+        <div className="min-w-0 flex-1 text-left">
+          <div className="flex items-center gap-2">
+            <h3>{item.name}</h3>
+            <StatusBadge status={item.status} />
+          </div>
+          <p>
+            <MapPin size={13} />
+            {item.location}
+            <span>·</span>
+            {item.date}
+          </p>
+          {item.status === "Lost" && (
+            <small className="activity-reward">
+              <WalletCards size={12} />
+              {item.rewardType && item.rewardType !== "none"
+                ? `Reward: ${rewardText(item)}`
+                : "No Reward"}
+            </small>
+          )}
         </div>
-        <p>
-          <MapPin size={13} />
-          {item.location}
-          <span>·</span>
-          {item.date}
-        </p>
-        {item.status === "Lost" && (
-          <small className="activity-reward">
-            <WalletCards size={12} />
-            {item.rewardType && item.rewardType !== "none"
-              ? `Reward: ${rewardText(item)}`
-              : "No Reward"}
-          </small>
-        )}
-      </div>
+        {!extra && <span className="icon-button" title="View details"><Eye size={16} aria-hidden="true" /></span>}
+      </button>
       {extra}
-    </button>
+    </div>
   )
 }
 
@@ -2985,6 +2978,7 @@ function Chat({
 }) {
   const [selected, setSelected] = useState(openedConversation ?? conversations[0]?.id)
   const [message, setMessage] = useState("")
+  const { chooseImage, cropDialog } = useImageCrop()
   const [attachment, setAttachment] = useState<MessageAttachment>()
   const [sending, setSending] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -3022,6 +3016,7 @@ function Chat({
         title="Chat inbox"
         text="Every conversation stays connected to a specific report or claim."
       />
+      {cropDialog}
       <div className="chat-shell">
         <aside
           className={`conversation-list ${conversation ? "has-selection" : ""}`}
@@ -3139,6 +3134,16 @@ function Chat({
                 const sizeLimit = file.type === "application/pdf" ? 2 * 1024 * 1024 : MAX_IMAGE_BYTES
                 if (file.size > sizeLimit || !["image/png", "image/jpeg", "image/webp", "application/pdf"].includes(file.type)) {
                   setError("Choose a PNG, JPEG, or WebP image up to 5 MB, or a PDF up to 2 MB.")
+                  return
+                }
+                if (file.type !== "application/pdf") {
+                  setError("")
+                  chooseImage(file, (url) => {
+                    const name = url.startsWith("data:image/jpeg") && file.type !== "image/jpeg"
+                      ? file.name.replace(/\.[^.]+$/, "") + ".jpg"
+                      : file.name
+                    setAttachment({ name, url })
+                  }, setError)
                   return
                 }
                 const reader = new FileReader()
@@ -3266,10 +3271,11 @@ function Profile({
   user: DemoUser
   notify: (message: string) => void
   onLogout: () => void | Promise<void>
-  onSave: (file: File) => Promise<void>
+  onSave: (photo: string) => Promise<void>
   reportCount: number
   returnCount: number
 }) {
+  const { chooseImage, cropDialog } = useImageCrop()
   const [savingPhoto, setSavingPhoto] = useState(false)
   const [photoError, setPhotoError] = useState("")
   const photoRef = useRef<HTMLInputElement>(null)
@@ -3285,25 +3291,31 @@ function Profile({
         title="Profile & settings"
         text="Review your verified identity and manage the details other users can see."
       />
+      {cropDialog}
       <div className="profile-grid">
         <aside className="profile-card">
           <div className="profile-photo">
             <AccountAvatar className="profile-photo-frame" user={user} />
-            <input ref={photoRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={async (event) => {
+            <input ref={photoRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
               const file = event.currentTarget.files?.[0]
               event.currentTarget.value = ""
               if (!file) return
-              if (file.size > MAX_IMAGE_BYTES) { setPhotoError("Profile photo must be 5 MB or smaller."); return }
-              setSavingPhoto(true)
-              setPhotoError("")
-              try {
-                await onSave(file)
-                notify("Profile photo updated.")
-              } catch (cause) {
-                setPhotoError(cause instanceof Error ? cause.message : "Could not save photo.")
-              } finally {
-                setSavingPhoto(false)
+              if (file.size > MAX_IMAGE_BYTES || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+                setPhotoError("Choose a PNG, JPEG, or WebP profile photo up to 5 MB.")
+                return
               }
+              setPhotoError("")
+              chooseImage(file, async (photo) => {
+                setSavingPhoto(true)
+                try {
+                  await onSave(photo)
+                  notify("Profile photo updated.")
+                } catch (cause) {
+                  setPhotoError(cause instanceof Error ? cause.message : "Could not save photo.")
+                } finally {
+                  setSavingPhoto(false)
+                }
+              }, setPhotoError)
             }} />
             <button type="button" disabled={savingPhoto} onClick={() => photoRef.current?.click()} aria-label="Edit profile photo">
               <Camera size={15} />

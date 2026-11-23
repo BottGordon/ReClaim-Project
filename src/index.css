@@ -413,7 +413,8 @@
   .activity-row { width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 17px; border-bottom: 1px solid #e9ece8; }
   .activity-row:last-child { border: 0; }
   .activity-row:hover { background: #f7faf8; }
-  .activity-row > img { width: 62px; height: 53px; flex: none; border-radius: 9px; object-fit: cover; }
+  .activity-details { min-width: 0; flex: 1; display: flex; align-items: center; gap: 14px; }
+  .activity-details > img { width: 62px; height: 53px; flex: none; border-radius: 9px; object-fit: cover; }
   .activity-row h3 { overflow: hidden; font-family: 'Plus Jakarta Sans'; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
   .activity-row p { margin-top: 7px; display: flex; align-items: center; gap: 6px; color: #768583; font-size: 9px; }
   .activity-reward { margin-top: 6px; display: flex; align-items: center; gap: 5px; color: #795f28; font-size: 8px; font-weight: 600; }

@@ -244,12 +244,17 @@ export async function register(input: Record<string, string>) {
     .upsert(profile, { onConflict: "id" })
   if (profileError) throw new Error(`Could not save the account profile: ${profileError.message}`)
 
-  const result = await request<{ token: string }>("/auth/supabase-session", {
+  const registration = await request<{ token: string }>("/auth/supabase-session", {
     method: "POST", body: JSON.stringify({ accessToken: session.access_token }),
   })
-  rememberSession(result.token, true)
+  clearSession()
+  await request("/auth/logout", {
+    method: "POST", headers: { Authorization: `Bearer ${registration.token}` },
+  }).catch(() => {})
+  const { error: signOutError } = await supabase.auth.signOut({ scope: "local" })
+  if (signOutError) throw signOutError
   completedRegistrations.add(email)
-  return { message: "Account created. You can now sign in.", token: result.token }
+  return { message: "Account created. You can now sign in." }
 }
 
 export function startRegistration(email: string, accountType = "PLM") {
