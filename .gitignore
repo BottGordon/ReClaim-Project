@@ -10,6 +10,9 @@ vite.config.*.timestamp-*
 logs/
 *.log
 backend/data/*.json
+backend/data/*.json.tmp
+__pycache__/
+.venv/
 .claude-replay.*
 .tmp-*
 /.figma/design-context/

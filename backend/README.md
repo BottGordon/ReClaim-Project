@@ -1,26 +1,30 @@
-# ReClaim local backend
+# ReClaim backend
 
-The API is a dependency-free Node.js service. It stores records in `backend/data/reclaim.json` and hashes passwords with Node's built-in `node:crypto` module.
+The API runs on Python 3.11+ with FastAPI and Uvicorn. It reads and writes the existing `backend/data/reclaim.json` format and accepts existing scrypt password hashes.
 
 ## Run locally
 
-Open two VS Code terminals in the project root:
+From the project root, install the Python dependencies and start the API:
 
 ```powershell
+python -m pip install -r backend/requirements.txt
 npm run backend
-npm run dev
 ```
 
-The API listens on `127.0.0.1:3001`; Vite proxies `/api` requests to it.
+The API listens on `127.0.0.1:3001` by default. Vite proxies `/api` requests to it. If Vite isn't running, start it in another terminal with `npm run dev`.
+
+To switch an existing installation, stop the old Node API before starting the Python API. Use the same `RECLAIM_DATA_DIR` so the new process opens the existing records. Sessions are held in memory, so users will sign in again after the switch.
 
 ## Deploy with Cloudflare Pages
 
-Pages serves `dist` and the Pages Function in `functions/api` forwards same-origin API requests to a separate HTTPS Node origin. The frontend leaves `VITE_API_BASE` unset so requests go through that function.
+Pages serves `dist` and the Pages Function in `functions/api` forwards same-origin API requests to a separate HTTPS Python origin. The frontend leaves `VITE_API_BASE` unset so requests go through that function.
 
-1. Run `npm run backend` on a Node 24 host. Use `NODE_ENV=production` and a single instance with `RECLAIM_DATA_DIR` on a persistent volume. Set `API_HOST=0.0.0.0` if required by the host, or leave the default loopback binding if using Cloudflare Tunnel on the same machine. Configure the backend Supabase URL, public key, and server-only service-role key. Verify the HTTPS origin serves `/api/health`.
+For a frontend configured to call the API directly with `VITE_API_BASE`, set `CORS_ORIGINS` on the API host to the frontend's exact origin. Separate multiple origins with commas.
+
+1. Install dependencies with `python -m pip install -r backend/requirements.txt`, then run `python backend/server.py` on a Python 3.11+ host. Use `NODE_ENV=production` and a single instance with `RECLAIM_DATA_DIR` on a persistent volume. Set `API_HOST=0.0.0.0` if required by the host, or leave the default loopback binding if using Cloudflare Tunnel on the same machine. Configure the backend Supabase URL, public key, and server-only service-role key. Verify the HTTPS origin serves `/api/health`.
 2. Build from the repository root. Run `git lfs pull` so the item photos are available, then run `npm ci` and `npm run build`. Supply `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` (or `VITE_SUPABASE_ANON_KEY`) in the build environment. Use the public browser key only.
-3. For a new Direct Upload project, run `npx wrangler login` and `npx wrangler pages project create`. In the Pages project settings, set `RECLAIM_API_ORIGIN` to the Node HTTPS origin, for example `https://api.example.com`. Run `npx wrangler pages deploy dist --project-name <project-name>` from the repository root so Wrangler includes the Pages Function. For Git integration, select `main`, a build command that fetches Git LFS objects before `npm run build`, and the `dist` output directory.
-4. Open the Pages URL and check `/api/health`. Sign in with a regular account for Browse and with an admin account for `/admin`. Authentication sessions reset whenever the Node process restarts. Copy any existing local records to the hosted persistent volume separately if you want to retain them.
+3. For a new Direct Upload project, run `npx wrangler login` and `npx wrangler pages project create`. In the Pages project settings, set `RECLAIM_API_ORIGIN` to the Python service's HTTPS origin, such as `https://api.example.com`. Run `npx wrangler pages deploy dist --project-name <project-name>` from the repository root so Wrangler includes the Pages Function. For Git integration, select `main`, a build command that fetches Git LFS objects before `npm run build`, and the `dist` output directory.
+4. Open the Pages URL and check `/api/health`. Sign in with a regular account for Browse and with an admin account for `/admin`. Copy any existing local records to the hosted persistent volume separately if you want to retain them.
 
 ## Admin Console
 
@@ -28,7 +32,7 @@ The web sign-in form authenticates with Supabase Auth. Configure `VITE_SUPABASE_
 
 Accounts created only through the legacy local registration flow need a verified Supabase Auth account with the same email before they can use web sign-in. Existing ReClaim records are linked on the first verified Supabase sign-in.
 
-The console and student workspace share the Node API's record store. Claim decisions, custody changes, privacy publication, match links, and desk settings persist there. Any reports or claims already stored only in Supabase require a separate data migration. New IDs and Cards reports are held for privacy review until an administrator publishes redacted text.
+The console and student workspace share the API's record store. Claim decisions, custody changes, privacy publication, match links, and desk settings persist there. Any reports or claims already stored only in Supabase require a separate data migration. New IDs and Cards reports are held for privacy review until an administrator publishes redacted text.
 
 ## PLM Outlook email delivery
 
