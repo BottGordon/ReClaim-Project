@@ -1,3 +1,4 @@
+import { requireStrongPassword } from "./password"
 import { getSupabaseClient, supabase } from "./supabase"
 
 const TOKEN_KEY = "reclaim.session"
@@ -207,6 +208,7 @@ const verifiedOtpRequests = new Set<string>()
 const completedRegistrations = new Set<string>()
 
 export async function register(input: Record<string, string>) {
+  requireStrongPassword(input.password)
   const supabase = getSupabaseClient()
   const email = String(input.email || "").trim().toLowerCase()
   if (completedRegistrations.has(email)) {
@@ -327,6 +329,7 @@ export async function requestPasswordReset(email: string) {
 }
 
 export async function resetPassword(email: string, code: string, password: string) {
+  requireStrongPassword(password)
   if (supabase) {
     const canonical = email.trim().toLowerCase()
     const { data } = await supabase.auth.getSession()
@@ -551,6 +554,7 @@ export async function saveProfile(input: { photo: string }) {
 }
 
 export function changePassword(currentPassword: string, newPassword: string) {
+  requireStrongPassword(newPassword)
   return request<{ message: string }>("/profile/password", {
     method: "PUT", body: JSON.stringify({ currentPassword, newPassword }),
   })

@@ -1,3 +1,4 @@
+import { meetsPasswordRequirements, passwordRequirement } from "./lib/password"
 import { useImageCrop } from "./ImageCrop"
 import { AdminConsole } from "./AdminConsole"
 import { GuestWorkspace } from "./GuestWorkspace"
@@ -1321,7 +1322,6 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const [details, setDetails] = useState({ name: "", studentNumber: "", phone: "", school: "", password: "", confirm: "" })
-  const passwordRule = /^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/
   const external = accountKind === "external"
 
   async function sendCode(event: FormEvent) {
@@ -1346,7 +1346,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
 
   async function createAccount(event: FormEvent) {
     event.preventDefault(); setError("")
-    if (!passwordRule.test(details.password)) { setError("Password needs 8+ characters, an uppercase letter, a number, and a special character."); return }
+    if (!meetsPasswordRequirements(details.password)) { setError(passwordRequirement); return }
     if (details.password !== details.confirm) { setError("Passwords do not match."); return }
     setBusy(true)
     try {
@@ -1472,7 +1472,7 @@ function ForgotPassword({
               <label className="field-label mt-4 block" htmlFor="confirm-password">Confirm new password</label>
               <div className="field-wrap"><input id="confirm-password" className="w-full" type={showPassword ? "text" : "password"} value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat new password" /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div>
               {error && <div className="form-error mt-4">{error}</div>}
-              <button className="btn-primary mt-6 w-full" disabled={busy || !password || !confirm} onClick={async () => { if (!/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(password)) { setError("Password needs 8+ characters, uppercase, a number, and a special character."); return } if (password !== confirm) { setError("Passwords do not match."); return } setBusy(true); setError(""); try { await resetPassword(email, code, password); setStep(4) } catch (cause) { setError(cause instanceof Error ? cause.message : "Password reset failed.") } finally { setBusy(false) } }}>{busy ? "Updating…" : "Change password"}<Check size={16} /></button>
+              <button className="btn-primary mt-6 w-full" disabled={busy || !password || !confirm} onClick={async () => { if (!meetsPasswordRequirements(password)) { setError(passwordRequirement); return } if (password !== confirm) { setError("Passwords do not match."); return } setBusy(true); setError(""); try { await resetPassword(email, code, password); setStep(4) } catch (cause) { setError(cause instanceof Error ? cause.message : "Password reset failed.") } finally { setBusy(false) } }}>{busy ? "Updating…" : "Change password"}<Check size={16} /></button>
             </>
           )}
           {step === 4 && (

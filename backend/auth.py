@@ -31,7 +31,7 @@ def email_from(data, error="Enter a valid email address."):
 
 def new_password(data, key, label):
     password = required(data.get(key), label, 200)
-    if not re.fullmatch(r"(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,}", password):
+    if not re.fullmatch(r"(?=.*[A-Z])(?=.*[0-9])(?=.*[\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]).{8,}", password):
         raise ApiError(400, PASSWORD_RULE)
     return password
 
