@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
-import { guestReports, messageGuestDesk, submitGuestReport, type ApiUser, type GuestReport } from "./lib/api"
+import { formatMessageTime, guestReports, messageGuestDesk, submitGuestReport, type ApiUser, type GuestReport } from "./lib/api"
 import { PhoneSettings, phoneInput, phonePattern } from "./PhoneSettings"
 import { useLiveRefresh } from "./lib/useLiveRefresh"
 
@@ -112,7 +112,7 @@ export function GuestWorkspace({ user, brand, onSignOut }: { user: ApiUser; bran
           <p className="mt-1 text-sm">{report.kind} · {report.location} · {report.date}</p>
           <p className="mt-2 whitespace-pre-wrap">{report.description}</p>
           {report.messages.length > 0 && <div className="admin-record-list">{report.messages.map((message) =>
-            <article key={message.id}><div><b>{message.sender === "Desk" ? "Campus desk" : "You"}</b><p className="whitespace-pre-wrap">{message.text}</p></div></article>,
+            <article key={message.id}><div><b>{message.sender === "Desk" ? "Campus desk" : "You"}</b><p className="whitespace-pre-wrap">{message.text}</p><small>{formatMessageTime({ time: message.createdAt })}</small></div></article>,
           )}</div>}
           <form key={report.id} className="admin-form" onSubmit={(event) => void save(event, report.id)}>
             <label>Message the campus desk<textarea name="text" required maxLength={2000} /></label>

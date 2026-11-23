@@ -11,11 +11,13 @@ import {
   ApiNotification,
   ApiUser,
   MessageAttachment,
+  MAX_IMAGE_BYTES,
   bootstrap,
   changePassword,
   clearSession,
   createClaim,
   createItem,
+  formatMessageTime,
   login,
   logout,
   markConversationRead,
@@ -152,6 +154,7 @@ type Message = {
   mine: boolean
   text: string
   time: string
+  createdAt?: string
   read?: boolean
   attachment?: MessageAttachment
 }
@@ -1221,8 +1224,10 @@ function Auth({ onLogin }: { onLogin: () => Promise<void> }) {
                               : "Staff ID number"
                           }
                           name="id"
+                          inputMode={role === "student" ? "numeric" : undefined}
+                          pattern={role === "student" ? "[0-9]{9}" : undefined}
                           placeholder={
-                            role === "student" ? "2022-12345" : "PLM-STAFF-001"
+                            role === "student" ? "202411649" : "PLM-STAFF-001"
                           }
                         />
                         <Field
@@ -1362,7 +1367,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
     {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Resident / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
     {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM resident account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM resident email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
     {stage === "otp" && <><p className="eyebrow mt-5">Email verification</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Check your inbox.</h1><form className="mt-6 space-y-5" onSubmit={checkCode}><p className="auth-copy">Enter the six-digit code sent to <b>{email}</b>.</p><label className="field-label" htmlFor="signup-otp">One-time password</label><input className="plain-input w-full text-center tracking-[0.35em]" id="signup-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify email"}<ChevronRight size={16} /></button><button type="button" className="text-button" disabled={busy} onClick={async () => { setError(""); try { await resendVerification(email); setCode("") } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") } }}>Resend code</button></form></>}
-    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required placeholder={role === "student" ? "2024-11649" : "Staff ID"} pattern={role === "student" ? "[0-9]{4}-[0-9]{5}" : undefined} value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: role === "student" ? studentInput(event.target.value) : event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
+    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required placeholder={role === "student" ? "202411649" : "Staff ID"} inputMode={role === "student" ? "numeric" : undefined} pattern={role === "student" ? "[0-9]{9}" : undefined} value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: role === "student" ? studentInput(event.target.value) : event.target.value })} /><label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /></>}<label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><small className="text-muted">At least 8 characters, with uppercase, number, and special character.</small><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><label className="flex items-start gap-2 text-xs text-muted"><input type="checkbox" required />I agree to ReClaim's privacy and responsible use policy.</label>{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
   </div></main></div>
 }
 function AuthDecor() {
@@ -1512,7 +1517,10 @@ function Field({
           placeholder={placeholder}
           inputMode={inputMode}
           pattern={name === "contact" ? phonePattern : pattern}
-          onInput={name === "contact" ? (event) => { event.currentTarget.value = phoneInput(event.currentTarget.value) } : undefined}
+          onInput={(event) => {
+            if (name === "contact") event.currentTarget.value = phoneInput(event.currentTarget.value)
+            if (name === "id" && inputMode === "numeric") event.currentTarget.value = studentInput(event.currentTarget.value)
+          }}
           title={title}
           required={!label.includes("optional")}
         />
@@ -1591,10 +1599,12 @@ export default function App() {
   const workspaceRequest = useRef(0)
   const workspaceApplied = useRef(0)
   const accountGeneration = useRef(0)
+  const pendingPhotoSave = useRef<Promise<void> | undefined>(undefined)
   const [page, setPage] = useState<Page>("browse")
   const [items, setItems] = useState<ApiItem[]>([])
   const [claims, setClaims] = useState<ApiClaim[]>([])
   const [conversations, setConversations] = useState<ApiConversation[]>([])
+  const [openedConversation, setOpenedConversation] = useState<number>()
   const [notifications, setNotifications] = useState<ApiNotification[]>([])
   const [selectedItem, setSelectedItem] = useState<ApiItem | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
@@ -1642,7 +1652,38 @@ export default function App() {
     return data
   }
 
-  useLiveRefresh(Boolean(currentUser && currentUser.accountType !== "External User" && page !== "admin"), (signal) => refreshWorkspace(false, signal))
+  useLiveRefresh(Boolean(currentUser && currentUser.accountType !== "External User" && page !== "admin"), async (signal) => {
+    if (!pendingPhotoSave.current) await refreshWorkspace(false, signal)
+  })
+
+  function updateProfilePhoto(file: File) {
+    if (pendingPhotoSave.current) return pendingPhotoSave.current
+    const generation = accountGeneration.current
+    const operation = (async () => {
+      const photo = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(new Error("Could not read the profile photo."))
+        reader.readAsDataURL(file)
+      })
+      let user
+      try {
+        user = await saveProfile({ photo })
+      } catch (failure) {
+        if ((failure as { status?: number }).status !== 401) throw failure
+        await refreshWorkspace()
+        if (generation !== accountGeneration.current) throw failure
+        user = await saveProfile({ photo })
+      }
+      if (generation !== accountGeneration.current) return
+      // A refresh started before the save can still contain the previous photo.
+      workspaceApplied.current = ++workspaceRequest.current
+      setCurrentUser((current) => current?.id === user.id ? { ...current, photo: user.photo } : current)
+    })()
+    pendingPhotoSave.current = operation
+    void operation.finally(() => { pendingPhotoSave.current = undefined }).catch(() => {})
+    return operation
+  }
 
   useEffect(() => {
     let active = true
@@ -1686,13 +1727,17 @@ export default function App() {
   }
 
   async function signOut() {
+    await pendingPhotoSave.current?.catch(() => {})
     accountGeneration.current++
     closeAccountMenu()
     await logout().catch(() => {})
+    window.history.replaceState(null, "", "/")
+    setIsAdmin(false)
     setCurrentUser(null)
     setItems([])
     setClaims([])
     setConversations([])
+    setOpenedConversation(undefined)
     setNotifications([])
     setSelectedItem(null)
     goTo("browse")
@@ -1720,14 +1765,7 @@ export default function App() {
   ).length
 
   if (isAdmin && page === "admin") {
-    return <AdminConsole user={currentUser} brand={<Logo light />} onSignOut={async () => {
-      accountGeneration.current++
-      await logout()
-      window.history.replaceState(null, "", "/")
-      setCurrentUser(null)
-      setIsAdmin(false)
-      setPage("browse")
-    }} />
+    return <AdminConsole user={currentUser} brand={<Logo light />} onSignOut={signOut} />
   }
 
   if (currentUser.accountType === "External User") {
@@ -1892,6 +1930,7 @@ export default function App() {
           {page === "chat" && (
             <Chat
               conversations={conversations}
+              openedConversation={openedConversation}
               items={items}
               setConversations={setConversations}
               onRefresh={refreshWorkspace}
@@ -1913,10 +1952,7 @@ export default function App() {
               user={currentUser}
               notify={notify}
               onLogout={signOut}
-              onSave={async (photo) => {
-                const user = await saveProfile({ photo })
-                setCurrentUser(mapUser(user))
-              }}
+              onSave={updateProfilePhoto}
               reportCount={items.filter((item) => item.ownerId === currentUser.id).length}
               returnCount={items.filter((item) => item.ownerId === currentUser.id && item.status === "Returned").length}
             />
@@ -1931,7 +1967,8 @@ export default function App() {
           onMessage={async () => {
             try {
               const conversation = await startConversation(selectedItem.id)
-              setConversations((all) => all.some((entry) => entry.id === conversation.id) ? all : [conversation, ...all])
+              setOpenedConversation(conversation.id)
+              setConversations((all) => [conversation, ...all.filter((entry) => entry.id !== conversation.id)])
               setSelectedItem(null)
               goTo("chat")
             } catch (cause) { notify(cause instanceof Error ? cause.message : "Could not start a conversation.") }
@@ -2402,10 +2439,12 @@ function ReportForm({
             onChange={(event) => {
               const file = event.target.files?.[0]
               if (!file) return
-              if (file.size > 2 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
+              if (file.size > MAX_IMAGE_BYTES || !["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
+                setSaveError("Choose a PNG, JPEG, WebP, or GIF photo up to 5 MB.")
                 event.target.value = ""
                 return
               }
+              setSaveError("")
               const reader = new FileReader()
               reader.onload = () => setPreview(String(reader.result || ""))
               reader.readAsDataURL(file)
@@ -2424,7 +2463,7 @@ function ReportForm({
                   <Camera size={24} />
                 </span>
                 <b>Upload a clear item photo</b>
-                <small>PNG or JPG, up to 2 MB</small>
+                <small>PNG, JPEG, WebP, or GIF, up to 5 MB</small>
               </>
             )}
           </button>
@@ -2483,7 +2522,6 @@ function ItemModal({
   const [proof, setProof] = useState("")
   const [proofError, setProofError] = useState("")
   const [explanation, setExplanation] = useState("")
-  const [duplicateDialog, setDuplicateDialog] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [claimError, setClaimError] = useState("")
   return (
@@ -2564,17 +2602,12 @@ function ItemModal({
                   <MessageCircle size={16} /> {item.status === "Returned" ? "Think this is yours? Message the finder" : "Message reporter"}
                 </button>}
                 {item.mine && item.status === "Returned" && <button className="btn-primary" onClick={onUndoReturn}>Undo return</button>}
-                {!item.mine && (item.status === "Found" ||
+                {!item.mine && verificationAlreadySubmitted && <span className="text-sm text-muted">Ownership verification submitted</span>}
+                {!item.mine && !verificationAlreadySubmitted && (item.status === "Found" ||
                   item.status === "Pending Claim") && (
                   <button
                     className="btn-primary"
-                    onClick={() => {
-                      if (verificationAlreadySubmitted) {
-                        setDuplicateDialog(true)
-                      } else {
-                        setClaimStep("verify")
-                      }
-                    }}
+                    onClick={() => setClaimStep("verify")}
                   >
                     <ShieldCheck size={16} /> Request to claim
                   </button>
@@ -2662,11 +2695,10 @@ function ItemModal({
                     const file = event.target.files?.[0]
                     if (!file) return
                     setProofError("")
-                    const maxSize = 2 * 1024 * 1024
-                    if (file.size > maxSize) {
+                    if (file.size > MAX_IMAGE_BYTES) {
                       setProof("")
                       setProofError(
-                        "The photo must be 2 MB or smaller.",
+                        "The photo must be 5 MB or smaller.",
                       )
                       input.value = ""
                       return
@@ -2711,7 +2743,7 @@ function ItemModal({
               </label>
               <p className="proof-helper">
                 Upload a photo of yourself with the item as additional proof of
-                ownership. Accepted formats: JPG and JPEG. Maximum file size: 2 MB.
+                ownership. Accepted formats: JPG and JPEG. Maximum file size: 5 MB.
               </p>
               {proofError && (
                 <div className="form-error mt-3">
@@ -2737,11 +2769,7 @@ function ItemModal({
                   setSubmitting(true)
                   setClaimError("")
                   try {
-                    const accepted = await onClaim(answer, proof, explanation)
-                    if (!accepted) {
-                    setClaimStep("detail")
-                    setDuplicateDialog(true)
-                    }
+                    await onClaim(answer, proof, explanation)
                   } catch (cause) {
                     setClaimError(cause instanceof Error ? cause.message : "Could not submit the claim.")
                   } finally {
@@ -2755,38 +2783,6 @@ function ItemModal({
             </>
           )}
         </div>
-        {duplicateDialog && (
-          <div className="verification-dialog-layer">
-            <div
-              className="verification-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="verification-dialog-title"
-            >
-              <div className="verification-dialog-icon">
-                <ShieldCheck size={22} />
-              </div>
-              <h3 id="verification-dialog-title">
-                Verification Already Submitted
-              </h3>
-              <p>
-                You have already submitted your verification answers for this
-                item. You are only allowed to answer the verification questions
-                once per Found item. Please wait for the finder to review your
-                claim request and respond.
-              </p>
-              <button
-                className="btn-primary"
-                onClick={() => {
-                  setDuplicateDialog(false)
-                  setClaimStep("detail")
-                }}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )
@@ -2877,7 +2873,11 @@ function Activity({
       {tab === "claims" && (
         <div className="list-card">
           {myClaims.map((claim) => {
-            const item = items.find((entry) => entry.id === claim.itemId)!
+            const item = items.find((entry) => entry.id === claim.itemId)
+            if (!item) return <div key={claim.id} className="flex items-center justify-between gap-3 p-4">
+              <div><b>Claim for report #{claim.itemId}</b><p className="text-sm text-muted">This report is currently unavailable.</p></div>
+              <StatusBadge status={claim.status} />
+            </div>
             return (
               <ActivityRow
                 key={claim.id}
@@ -2972,16 +2972,18 @@ function ActivityRow({
 
 function Chat({
   conversations,
+  openedConversation,
   items,
   setConversations,
   onRefresh,
 }: {
   conversations: Conversation[]
+  openedConversation?: number
   items: Item[]
   setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>
   onRefresh: () => Promise<unknown>
 }) {
-  const [selected, setSelected] = useState(conversations[0]?.id)
+  const [selected, setSelected] = useState(openedConversation ?? conversations[0]?.id)
   const [message, setMessage] = useState("")
   const [attachment, setAttachment] = useState<MessageAttachment>()
   const [sending, setSending] = useState(false)
@@ -3071,7 +3073,7 @@ function Chat({
                     <span className="conversation-copy">
                       <span>
                         <b>{displayName}</b>
-                      <small>{last?.time || "No messages yet"}</small>
+                      <small>{last ? formatMessageTime(last) : "No messages yet"}</small>
                       </span>
                       <em>{related?.name}</em>
                       <p className={entry.unread > 0 ? "font-bold" : ""}>{last?.text || last?.attachment?.name || "Start the conversation"}</p>
@@ -3112,7 +3114,6 @@ function Chat({
               const { scrollHeight, scrollTop, clientHeight } = event.currentTarget
               followMessages.current = scrollHeight - scrollTop - clientHeight <= 48
             }}>
-              <div className="message-date">Today</div>
               {conversation.messages.map((entry) => (
                 <div
                   key={entry.id}
@@ -3121,7 +3122,7 @@ function Chat({
                   <div className={`message ${!entry.mine && !entry.read ? "font-bold" : ""}`}>
                     {entry.text}{entry.attachment && <div><a className="underline" href={entry.attachment.url} download={entry.attachment.name}>{entry.attachment.name}</a></div>}
                   </div>
-                  <span>{entry.time}{entry.mine && <small className="ml-2">{entry.read ? "Seen" : "Sent"}</small>}</span>
+                  <span>{formatMessageTime(entry)}{entry.mine && <small className="ml-2">{entry.read ? "Seen" : "Sent"}</small>}</span>
                 </div>
               ))}
             </div>
@@ -3135,8 +3136,9 @@ function Chat({
                 const file = event.currentTarget.files?.[0]
                 event.currentTarget.value = ""
                 if (!file) return
-                if (file.size > 2 * 1024 * 1024 || !["image/png", "image/jpeg", "image/webp", "application/pdf"].includes(file.type)) {
-                  setError("Choose a PNG, JPEG, WebP, or PDF file up to 2 MB.")
+                const sizeLimit = file.type === "application/pdf" ? 2 * 1024 * 1024 : MAX_IMAGE_BYTES
+                if (file.size > sizeLimit || !["image/png", "image/jpeg", "image/webp", "application/pdf"].includes(file.type)) {
+                  setError("Choose a PNG, JPEG, or WebP image up to 5 MB, or a PDF up to 2 MB.")
                   return
                 }
                 const reader = new FileReader()
@@ -3264,11 +3266,11 @@ function Profile({
   user: DemoUser
   notify: (message: string) => void
   onLogout: () => void | Promise<void>
-  onSave: (photo: string) => Promise<void>
+  onSave: (file: File) => Promise<void>
   reportCount: number
   returnCount: number
 }) {
-  const [photo, setPhoto] = useState(user.photo || "")
+  const [savingPhoto, setSavingPhoto] = useState(false)
   const [photoError, setPhotoError] = useState("")
   const photoRef = useRef<HTMLInputElement>(null)
   const [securityOpen, setSecurityOpen] = useState(false)
@@ -3286,13 +3288,29 @@ function Profile({
       <div className="profile-grid">
         <aside className="profile-card">
           <div className="profile-photo">
-            {photo ? <img src={photo} alt="Profile" /> : user.initials}
-            <input ref={photoRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 2 * 1024 * 1024) { setPhotoError("Profile photo must be 2 MB or smaller."); event.target.value = ""; return } const reader = new FileReader(); reader.onload = async () => { const next = String(reader.result || ""); try { await onSave(next); setPhoto(next); setPhotoError(""); notify("Profile photo updated.") } catch (cause) { setPhotoError(cause instanceof Error ? cause.message : "Could not save photo.") } }; reader.readAsDataURL(file) }} />
-            <button type="button" onClick={() => photoRef.current?.click()} aria-label="Edit profile photo">
+            <AccountAvatar className="profile-photo-frame" user={user} />
+            <input ref={photoRef} className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={async (event) => {
+              const file = event.currentTarget.files?.[0]
+              event.currentTarget.value = ""
+              if (!file) return
+              if (file.size > MAX_IMAGE_BYTES) { setPhotoError("Profile photo must be 5 MB or smaller."); return }
+              setSavingPhoto(true)
+              setPhotoError("")
+              try {
+                await onSave(file)
+                notify("Profile photo updated.")
+              } catch (cause) {
+                setPhotoError(cause instanceof Error ? cause.message : "Could not save photo.")
+              } finally {
+                setSavingPhoto(false)
+              }
+            }} />
+            <button type="button" disabled={savingPhoto} onClick={() => photoRef.current?.click()} aria-label="Edit profile photo">
               <Camera size={15} />
             </button>
           </div>
-          {photoError && <small className="form-error">{photoError}</small>}
+          {savingPhoto && <small role="status">Saving profile photo…</small>}
+          {photoError && <small className="form-error" role="alert">{photoError}</small>}
           <h2>{user.name}</h2>
           <p>{user.email}</p>
           <span className="verified-chip">

@@ -3,7 +3,8 @@ import secrets
 import time
 from datetime import datetime, timezone
 
-MAX_BODY_BYTES = 6 * 1024 * 1024
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_BODY_BYTES = 7 * 1024 * 1024
 PASSWORD_RULE = "Password must be 8+ characters and include an uppercase letter, a number, and a special character."
 
 
@@ -87,5 +88,18 @@ def phone_number(value):
 def student_number(value):
     digits = re.fullmatch(r"([0-9]{4})-?([0-9]{5})", clean(value, 20))
     if not digits:
-        raise ApiError(400, "Enter your student number in YYYY-NNNNN format.")
-    return f"{digits[1]}-{digits[2]}"
+        raise ApiError(400, "Enter your nine-digit student number.")
+    return digits[1] + digits[2]
+
+
+def valid_upload(value, media_types, max_bytes=MAX_IMAGE_BYTES):
+    if not isinstance(value, str):
+        return False
+    header, separator, encoded = value.partition(",")
+    if not separator or not any(header == f"data:{media};base64" for media in media_types):
+        return False
+    if len(encoded) > ((max_bytes + 2) // 3) * 4 or len(encoded) % 4:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", encoded)) and (
+        len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("="))) <= max_bytes
+    )

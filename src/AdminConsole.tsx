@@ -5,7 +5,8 @@ import { AccountAvatar } from "./AccountAvatar"
 import { useLiveRefresh } from "./lib/useLiveRefresh"
 import {
   adminLinkMatch, adminLogWalkIn, adminMessageClaimant, adminModerate, adminOverview,
-  adminReplyToGuest, adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, adminVerifyGuestHandover, setNotificationRead,
+  adminReplyToGuest, adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, adminVerifyGuestHandover, markDeskActivityRead, setNotificationRead,
+  adminEditLostReport, formatMessageTime,
   type AdminOverview, type ApiClaim, type ApiItem, type ApiUser,
 } from "./lib/api"
 
@@ -61,7 +62,8 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [publishedSamples, setPublishedSamples] = useState<Record<number, Pick<ApiItem, "name" | "description" | "question">>>({})
   const [sampleCustody, setSampleCustody] = useState<Record<number, Pick<ApiItem, "custodyDeskId" | "shelfTag">>>({})
   const [linkedSampleMatches, setLinkedSampleMatches] = useState<Set<string>>(() => new Set())
-  const [readDeskActivity, setReadDeskActivity] = useState<Set<string>>(() => new Set())
+  const [pendingDeskReads, setPendingDeskReads] = useState<Set<string>>(() => new Set())
+  const deskReadRequests = useRef(new Set<Promise<unknown>>())
   const actionVersion = useRef(0)
   const actionInFlight = useRef(false)
   const combined = liveData && combineAdminRecords(liveData)
@@ -185,6 +187,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
       selection: { type: "item", id: item.id } as const,
     })),
   ]
+  const readDeskActivity = new Set([...(data?.readDeskActivity ?? []), ...pendingDeskReads])
   const unread = notifications.filter((entry) => entry.unread).length +
     deskActivity.filter((entry) => !readDeskActivity.has(entry.key)).length
   const samples = [
@@ -338,7 +341,10 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         </button>)}
       </nav>
       <div className="admin-sidebar-user"><AccountAvatar className="admin-user-avatar" user={user} /><b>{user.name}</b><small>PLM Intramuros Campus</small>
-        {onSignOut && <button onClick={() => { void onSignOut().catch((failure) => setError(messageFor(failure))) }}><LogOut size={14} /> Sign out</button>}
+        {onSignOut && <button onClick={async () => {
+          await Promise.allSettled(deskReadRequests.current)
+          void onSignOut().catch((failure) => setError(messageFor(failure)))
+        }}><LogOut size={14} /> Sign out</button>}
       </div>
     </aside>
     <main className="admin-main">
@@ -456,8 +462,19 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
           {unread > 0 && <p className="admin-activity-count">{unread} unread</p>}
           {deskActivity.map((entry) => <article key={entry.key} data-unread={!readDeskActivity.has(entry.key)}>
             <button type="button" className="admin-activity-entry" onClick={() => {
-              setReadDeskActivity((previous) => new Set(previous).add(entry.key))
               inspect(entry.selection)
+              if (readDeskActivity.has(entry.key)) return
+              setPendingDeskReads((previous) => new Set(previous).add(entry.key))
+              const request = markDeskActivityRead(entry.key)
+              deskReadRequests.current.add(request)
+              void request.catch((failure) => {
+                setPendingDeskReads((previous) => {
+                  const remaining = new Set(previous)
+                  remaining.delete(entry.key)
+                  return remaining
+                })
+                setError(messageFor(failure))
+              }).finally(() => deskReadRequests.current.delete(request))
             }}><b>{entry.title}</b><p>{entry.text}</p></button>
           </article>)}
           {notifications.map((entry) => <article key={entry.id}><div><b>{entry.title}</b><p>{entry.text}</p></div>
@@ -529,7 +546,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               <section className="claim-chat-panel">
                 <header><b>Direct chat with {selectedClaim.claimant}</b><span>Synced with Student Inbox</span></header>
                 <div className="claim-chat-thread">
-                  {selectedMessages.map((entry) => <div key={entry.id} className={entry.mine ? "mine" : "theirs"}><p>{entry.text}</p><small>{entry.mine ? "OSDS Admin Office" : selectedClaim.claimant}</small></div>)}
+                  {selectedMessages.map((entry) => <div key={entry.id} className={entry.mine ? "mine" : "theirs"}><p>{entry.text}</p><small>{entry.mine ? "OSDS Admin Office" : selectedClaim.claimant} · {formatMessageTime(entry)}</small></div>)}
                   {!selectedMessages.length && <p>{selectedIsSample ? "Messages are disabled for sample claims." : "No messages yet."}</p>}
                 </div>
                 {claimant && claimant.id !== user.id && <form onSubmit={(event) => {
@@ -560,6 +577,16 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               {selectedItem.guestReport && <p><b>Guest contact</b> {selectedItem.guestEmail}{selectedItem.guestPhone && ` · ${selectedItem.guestPhone}`}</p>}
               {selectedItem.privateNotes && <p><b>Private notes</b> {selectedItem.privateNotes}</p>}
             </section>
+            {!selectedIsSample && !selectedItem.guestReport && selectedItem.status === "Lost" && selectedItem.privacy !== "Held" && <form className="admin-form" onSubmit={submit((form) => void run(
+              () => adminEditLostReport(selectedItem.id, { name: field(form, "name"), location: field(form, "location"), description: field(form, "description") }),
+              "Lost report updated.",
+            ))}>
+              <h2>Edit lost report</h2>
+              <label>Item name<input name="name" defaultValue={selectedItem.name} required maxLength={120} /></label>
+              <label>Location<input name="location" defaultValue={selectedItem.location} required maxLength={160} /></label>
+              <label>Description<textarea name="description" defaultValue={selectedItem.description} required maxLength={1500} /></label>
+              <button className="btn-primary" disabled={writeDisabled}>Save report edits</button>
+            </form>}
             {canChangeCustody && <form className="admin-form" onSubmit={submit((form) =>
               changeCustody(selectedItem, field(form, "deskId") || null, field(form, "shelfTag")))}>
               <label>Custody desk<select name="deskId" defaultValue={selectedItem.custodyDeskId || ""}><option value="">With finder</option>
@@ -572,7 +599,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
               <div className="admin-record-list">
                 <h2>Guest correspondence</h2>
                 {selectedItem.guestMessages?.map((message) => <article key={message.id}>
-                  <div><b>{message.sender === "Desk" ? "Campus desk" : selectedItem.reporter}</b><p className="whitespace-pre-wrap">{message.text}</p></div>
+                  <div><b>{message.sender === "Desk" ? "Campus desk" : selectedItem.reporter}</b><p className="whitespace-pre-wrap">{message.text}</p><small>{formatMessageTime({ time: message.createdAt })}</small></div>
                 </article>)}
               </div>
               <form className="admin-form" onSubmit={submit((form) => void run(() => adminReplyToGuest(selectedItem.id, field(form, "text")), "Reply sent."))}>

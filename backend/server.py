@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from admin import Admin
 from auth import Auth, is_external, public_user
-from common import ApiError, MAX_BODY_BYTES, clean
+from common import ApiError, MAX_BODY_BYTES, valid_upload
 from guest import GuestReports
 from records import Records
 from storage import Store, load_environment
@@ -102,12 +102,13 @@ class Service:
             ("PATCH", r"/api/profile", "user", True, self.update_profile),
             ("PUT", r"/api/profile/password", "user", True, lambda u, t, m, d: auth.change_password(u, t, d)),
             ("GET", r"/api/admin/overview", "admin", False, self.admin_overview),
+            ("POST", r"/api/admin/desk-activity/read", "admin", True, self.read_desk_activity),
             ("POST", r"/api/admin/guest-reports/([0-9]+)/messages", "admin", True, lambda u, t, m, d: self.guest.message(u, m[1], d, admin=True)),
             ("POST", r"/api/admin/guest-reports/([0-9]+)/handover", "admin", True, lambda u, t, m, d: self.guest.handover(u, m[1], d)),
             ("POST", r"/api/admin/items", "admin", True, lambda u, t, m, d: admin.log_walk_in(u, d)),
             ("PATCH", r"/api/admin/claims/([0-9]+)", "admin", True, lambda u, t, m, d: admin.update_claim(u, int(m[1]), d, False)),
             ("POST", r"/api/admin/claims/([0-9]+)/messages", "admin", True, lambda u, t, m, d: admin.update_claim(u, int(m[1]), d, True)),
-            ("PATCH", r"/api/admin/items/([0-9]+)/(status|custody|privacy)", "admin", True, lambda u, t, m, d: admin.update_item(m[1], m[2], d)),
+            ("PATCH", r"/api/admin/items/([0-9]+)/(status|custody|privacy|details)", "admin", True, lambda u, t, m, d: admin.update_item(m[1], m[2], d)),
             ("POST", r"/api/admin/matches", "admin", True, lambda u, t, m, d: admin.link_match(u, d)),
             ("PATCH", r"/api/admin/desks/([a-z-]+)", "admin", True, lambda u, t, m, d: admin.update_desk(m[1], d)),
         ]
@@ -135,13 +136,24 @@ class Service:
     def admin_overview(self, user, *_):
         status, overview = self.admin.overview(user)
         overview["items"] = [self.guest.admin_item(item) for item in overview["items"]]
+        overview["readDeskActivity"] = user.get("readDeskActivity", [])
         return status, overview
+
+    def read_desk_activity(self, user, token, match, data):
+        key = data.get("key")
+        if not isinstance(key, str) or not re.fullmatch(r"(?:(?:claim|privacy|custody|guest)-[0-9]{1,16}|g_[0-9a-f]{24})", key):
+            raise ApiError(400, "Choose a valid desk activity entry.")
+        entries = user.setdefault("readDeskActivity", [])
+        if key not in entries:
+            entries.append(key)
+            self.records.store.save()
+        return 200, {"ok": True}
 
     def update_profile(self, user, token, match, data):
         if "photo" in data:
-            photo = clean(data["photo"], 3 * 1024 * 1024)
-            if photo and not re.fullmatch(r"data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+", photo):
-                raise ApiError(400, "Upload a PNG, JPEG, or WebP profile photo.")
+            photo = data["photo"]
+            if photo != "" and not valid_upload(photo, ("image/png", "image/jpeg", "image/webp")):
+                raise ApiError(400, "Upload a PNG, JPEG, or WebP profile photo up to 5 MB.")
             user["photo"] = photo
         self.records.store.save()
         return 200, {"user": public_user(user)}

@@ -123,6 +123,14 @@ class Admin:
             else:
                 raise ApiError(400, "Select an active desk or With Finder.")
             item.pop("previousCustodyDesk", None)
+        elif action == "details":
+            if item["status"] != "Lost" or item.get("privacy") == "Held" or self.records.is_guest_report(item):
+                raise ApiError(409, "Only public lost reports can be edited here.")
+            item.update(
+                name=required(data.get("name"), "Item name", 120),
+                location=required(data.get("location"), "Location", 160),
+                description=required(data.get("description"), "Description", 1500),
+            )
         else:
             self.moderate(item, data)
         self.records.store.save()

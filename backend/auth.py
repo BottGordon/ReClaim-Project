@@ -48,7 +48,7 @@ def password_matches(password, stored):
 
 
 def public_user(user):
-    result = {key: value for key, value in user.items() if key != "passwordHash"}
+    result = {key: value for key, value in user.items() if key not in ("passwordHash", "readDeskActivity")}
     for key in ("accountType", "role"):
         if result.get(key) in ("PLM", "PLM Student"):
             result[key] = "PLM Resident"

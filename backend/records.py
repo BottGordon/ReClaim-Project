@@ -1,14 +1,12 @@
-import re
-
 from auth import is_external
-from common import ApiError, MAX_BODY_BYTES, clean, display_date, find, identifier, item_id, json_truth, milliseconds, required, timestamp
+from common import ApiError, clean, display_date, find, identifier, item_id, json_truth, milliseconds, required, timestamp, valid_upload
 
 OPEN_STATUSES = ("Found", "Pending Claim")
-IMAGE_DATA = r"data:image/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+"
+ITEM_IMAGES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 
 def normalize_image(item):
-    if not (item.get("image") or "").startswith("http"):
+    if not (item.get("image") or "").startswith("http") or not str(item.get("ownerId", "")).startswith("seed-"):
         return item
     name = item["name"].lower()
     images = [
@@ -44,6 +42,7 @@ def message_view(message, user_id, other_user_id):
     return {
         "id": message["id"], "mine": mine, "text": message["text"], "time": message["time"],
         "read": (other_user_id if mine else user_id) in (message.get("readBy") or []),
+        **({"createdAt": message["createdAt"]} if message.get("createdAt") else {}),
         **({"attachment": message["attachment"]} if "attachment" in message else {}),
     }
 
@@ -105,9 +104,9 @@ class Records:
     def create_item(self, user, data, desk=None):
         walk_in = desk is not None
         status = "Found" if walk_in or data.get("status") == "Found" else "Lost"
-        image = "" if walk_in else clean(data.get("image"), MAX_BODY_BYTES)
-        if image and not re.fullmatch(IMAGE_DATA, image) and not image.startswith("https://images.unsplash.com/"):
-            raise ApiError(400, "Upload a PNG, JPEG, WebP, or GIF image.")
+        image = "" if walk_in else (data.get("image") or "")
+        if image and not valid_upload(image, ITEM_IMAGES) and not (isinstance(image, str) and image.startswith("https://images.unsplash.com/")):
+            raise ApiError(400, "Upload a PNG, JPEG, WebP, or GIF image up to 5 MB.")
         item = {
             "id": next_id(self.items), "name": required(data.get("name"), "Item name", 120),
             "category": required(data.get("category"), "Category", 50),
@@ -147,6 +146,8 @@ class Records:
 
     def verify_answer(self, user, value, data):
         item = self.claimable_item(user, value)
+        if find(self.claims, itemId=item["id"], claimantId=user["id"]):
+            raise ApiError(409, "You have already submitted a claim for this item.")
         key = (user["id"], item["id"])
         attempts = self.answer_attempts.get(key, 0)
         if attempts >= 5:
@@ -158,16 +159,19 @@ class Records:
 
     def create_claim(self, user, data):
         item = self.claimable_item(user, data.get("itemId"))
-        if find(self.claims, itemId=item["id"], claimantId=user["id"], status="Pending"):
-            raise ApiError(409, "You already have a pending claim for this item.")
+        if find(self.claims, itemId=item["id"], claimantId=user["id"]):
+            raise ApiError(409, "You have already submitted a claim for this item.")
         if not item.get("answer") or clean(data.get("answer"), 200).lower() != item["answer"]:
             raise ApiError(403, "The ownership answer does not match.")
+        proof = data.get("proof") or ""
+        if proof and not valid_upload(proof, ("image/jpeg",)):
+            raise ApiError(400, "Upload a JPEG proof photo up to 5 MB.")
         claim = {
             "id": next_id(self.claims), "itemId": item["id"], "claimant": user["name"],
             "claimantId": user["id"], "accountType": user["accountType"], "status": "Pending",
             "requested": "Just now", "createdAt": timestamp(), "verified": True,
             "explanation": clean(data.get("explanation"), 1200),
-            "proof": clean(data.get("proof"), MAX_BODY_BYTES),
+            "proof": proof,
         }
         self.claims.insert(0, claim)
         item["status"] = "Pending Claim"
@@ -290,7 +294,7 @@ class Records:
     def add_message(self, thread, user_id, text):
         message = {
             "id": next_id(thread["messages"][-1:]), "senderId": user_id,
-            "text": text, "time": "Just now", "readBy": [user_id],
+            "text": text, "time": timestamp(), "readBy": [user_id],
         }
         thread["messages"].append(message)
         return message
@@ -315,10 +319,8 @@ class Records:
                 raise ApiError(400, "Invalid message attachment.")
             name = required(attachment.get("name"), "Attachment name", 120)
             url = attachment.get("url")
-            if not isinstance(url, str) or len(url) > 2_796_260 or not re.fullmatch(
-                r"data:(?:image/(?:png|jpeg|webp)|application/pdf);base64,[A-Za-z0-9+/]+={0,2}", url,
-            ):
-                raise ApiError(400, "Choose a PNG, JPEG, WebP, or PDF file up to 2 MB.")
+            if not valid_upload(url, ("image/png", "image/jpeg", "image/webp")) and not valid_upload(url, ("application/pdf",), 2 * 1024 * 1024):
+                raise ApiError(400, "Choose an image up to 5 MB or a PDF up to 2 MB.")
         if not text and attachment is None:
             raise ApiError(400, "Enter a message or attach a file.")
         message = self.add_message(thread, user_id, text)

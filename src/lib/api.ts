@@ -72,7 +72,19 @@ export type ApiClaim = {
 }
 
 export type MessageAttachment = { name: string; url: string }
-export type ApiMessage = { id: number; mine: boolean; text: string; time: string; read?: boolean; attachment?: MessageAttachment }
+export type ApiMessage = { id: number; mine: boolean; text: string; time: string; createdAt?: string; read?: boolean; attachment?: MessageAttachment }
+
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const messageClock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
+const messageCalendar = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+
+export function formatMessageTime(message: Pick<ApiMessage, "time"> & Partial<Pick<ApiMessage, "id" | "createdAt">>) {
+  const stored = message.createdAt || message.time
+  const instant = /^\d{4}-\d{2}-\d{2}T/.test(stored) ? Date.parse(stored) : (message.id ?? 0) >= 1_000_000_000_000 ? Number(message.id) : NaN
+  if (!Number.isFinite(instant)) return message.time === "Just now" ? "Time unavailable" : message.time
+  const date = new Date(instant)
+  return (date.toDateString() === new Date().toDateString() ? messageClock : messageCalendar).format(date)
+}
 export type ApiConversation = {
   id: number
   itemId: number
@@ -108,6 +120,7 @@ export type AdminOverview = {
   desks: AdminDesk[]
   matches: { lostId: number; foundId: number; linked: boolean }[]
   notifications: ApiNotification[]
+  readDeskActivity?: string[]
   claimThreads: { claimId: number; messages: ApiMessage[] }[]
   stats: {
     items: number
@@ -121,11 +134,16 @@ export type AdminOverview = {
 }
 
 type ApiError = Error & { status?: number; code?: string }
+let renewingSession: { previous: string | null; next?: string; promise: Promise<void> } | undefined
+
+function currentSessionToken() {
+  return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json")
-  const token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+  const token = currentSessionToken()
   if (token) headers.set("Authorization", `Bearer ${token}`)
   let response: Response
   try {
@@ -144,12 +162,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 function rememberSession(token: string, remember = true) {
-  clearSession()
+  localStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(TOKEN_KEY)
   ;(remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token)
   localStorage.setItem(REMEMBER_KEY, String(remember))
 }
 
 export function clearSession() {
+  renewingSession = undefined
   localStorage.removeItem(TOKEN_KEY)
   sessionStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(REMEMBER_KEY)
@@ -284,41 +304,99 @@ export async function resendVerification(email: string) {
   return { message: "A new verification code was sent." }
 }
 
-export function requestPasswordReset(email: string) {
+let recoveryEmail: string | undefined
+
+export async function requestPasswordReset(email: string) {
+  recoveryEmail = undefined
+  if (supabase) {
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim().toLowerCase(), options: { shouldCreateUser: false } })
+    if (error?.status === 429) throw new Error("Wait before requesting another recovery code.")
+    if (error && error.code !== "otp_disabled" && error.code !== "user_not_found" && error.code !== "signup_disabled") {
+      throw new Error("Could not send the recovery code. Try again shortly.")
+    }
+    return { message: "If the account exists, a recovery code was sent." }
+  }
   return request<{ message: string; demoCode?: string }>("/auth/forgot-password", {
     method: "POST", body: JSON.stringify({ email }),
   })
 }
 
-export function resetPassword(email: string, code: string, password: string) {
+export async function resetPassword(email: string, code: string, password: string) {
+  if (supabase) {
+    const canonical = email.trim().toLowerCase()
+    const { data } = await supabase.auth.getSession()
+    if (recoveryEmail !== canonical || data.session?.user.email?.toLowerCase() !== canonical) {
+      throw new Error("Verify your recovery code before changing your password.")
+    }
+    const { error } = await supabase.auth.updateUser({ password })
+    if (error) throw error
+    recoveryEmail = undefined
+    await supabase.auth.signOut().catch(() => {})
+    clearSession()
+    return { message: "Password updated." }
+  }
   return request<{ message: string }>("/auth/reset-password", {
     method: "POST", body: JSON.stringify({ email, code, password }),
   })
 }
 
-export function verifyPasswordReset(email: string, code: string) {
+export async function verifyPasswordReset(email: string, code: string) {
+  if (supabase) {
+    const canonical = email.trim().toLowerCase()
+    const { data, error } = await supabase.auth.verifyOtp({ email: canonical, token: code, type: "email" })
+    if (error || !data.session || data.user?.email?.toLowerCase() !== canonical) {
+      throw new Error("The recovery code is incorrect or expired.")
+    }
+    recoveryEmail = canonical
+    return { verified: true }
+  }
   return request<{ verified: boolean }>("/auth/verify-password-reset", {
     method: "POST", body: JSON.stringify({ email, code }),
   })
 }
 
-export async function bootstrap(signal?: AbortSignal) {
-  const originalToken = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+async function withSession<T>(path: string, init: RequestInit = {}) {
+  const { signal } = init
+  const originalToken = currentSessionToken()
   try {
-    return await request<Bootstrap>("/bootstrap", { signal })
+    return await request<T>(path, init)
   } catch (failure) {
-    if ((failure as ApiError).status !== 401 || !supabase || localStorage.getItem(REMEMBER_KEY) === null) throw failure
+    if ((failure as ApiError).status !== 401 || signal?.aborted || !supabase || localStorage.getItem(REMEMBER_KEY) === null) throw failure
+    const authClient = supabase
     const remember = localStorage.getItem(REMEMBER_KEY) === "true"
     if (!remember && !sessionStorage.getItem(TOKEN_KEY)) throw failure
-    const { data } = await supabase.auth.getSession()
-    if (!data.session || signal?.aborted) throw failure
-    const result = await request<{ token: string }>("/auth/supabase-session", {
-      method: "POST", body: JSON.stringify({ accessToken: data.session.access_token }), signal,
-    })
-    if (signal?.aborted || originalToken !== (localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY))) throw failure
-    rememberSession(result.token, remember)
-    return request<Bootstrap>("/bootstrap", { signal })
+    if (renewingSession?.previous !== originalToken || (renewingSession.next && renewingSession.next !== currentSessionToken())) {
+      if (originalToken !== currentSessionToken()) throw failure
+      const renewal = {
+        previous: originalToken,
+        next: undefined as string | undefined,
+        promise: Promise.resolve().then(async () => {
+          try {
+            const { data } = await authClient.auth.getSession()
+            if (!data.session || renewingSession !== renewal) throw failure
+            const result = await request<{ token: string }>("/auth/supabase-session", {
+              method: "POST", body: JSON.stringify({ accessToken: data.session.access_token }),
+            })
+            if (renewingSession !== renewal || originalToken !== currentSessionToken()) throw failure
+            rememberSession(result.token, remember)
+            renewal.next = result.token
+          } catch (error) {
+            if (renewingSession === renewal) renewingSession = undefined
+            throw error
+          }
+        }),
+      }
+      renewingSession = renewal
+    }
+    const renewal = renewingSession
+    await renewal.promise
+    if (signal?.aborted || !renewal.next || renewal.next !== currentSessionToken()) throw failure
+    return request<T>(path, init)
   }
+}
+
+export function bootstrap(signal?: AbortSignal) {
+  return withSession<Bootstrap>("/bootstrap", { signal })
 }
 
 export function requestPhoneChange(phone: string) {
@@ -331,6 +409,10 @@ export function confirmPhoneChange(code: string) {
 
 export function adminOverview(signal?: AbortSignal) {
   return request<AdminOverview>("/admin/overview", { signal })
+}
+
+export function markDeskActivityRead(key: string) {
+  return adminWrite("/desk-activity/read", "POST", { key })
 }
 
 export function guestReports(signal?: AbortSignal) {
@@ -377,6 +459,10 @@ export function adminSetCustody(id: number, deskId: string | null, shelfTag: str
   return adminWrite(`/items/${id}/custody`, "PATCH", { deskId, shelfTag })
 }
 
+export function adminEditLostReport(id: number, details: Pick<ApiItem, "name" | "location" | "description">) {
+  return adminWrite(`/items/${id}/details`, "PATCH", details)
+}
+
 export function adminModerate(id: number, input: { action: "hold" } | { action: "publish"; name: string; description: string; question?: string }) {
   return adminWrite(`/items/${id}/privacy`, "PATCH", input)
 }
@@ -420,7 +506,7 @@ export function verifyAnswer(itemId: number, answer: string) {
 }
 
 export async function startConversation(itemId: number) {
-  return (await request<{ conversation: ApiConversation }>("/conversations", {
+  return (await withSession<{ conversation: ApiConversation }>("/conversations", {
     method: "POST", body: JSON.stringify({ itemId }),
   })).conversation
 }
@@ -438,13 +524,13 @@ export async function undoReturned(id: number) {
 }
 
 export async function sendMessage(conversationId: number, text: string, attachment?: MessageAttachment) {
-  return request<{ message: ApiMessage }>(`/conversations/${conversationId}/messages`, {
+  return withSession<{ message: ApiMessage }>(`/conversations/${conversationId}/messages`, {
     method: "POST", body: JSON.stringify({ text, attachment }),
   })
 }
 
 export function markConversationRead(conversationId: number) {
-  return request<{ ok: boolean }>(`/conversations/${conversationId}/read`, {
+  return withSession<{ ok: boolean }>(`/conversations/${conversationId}/read`, {
     method: "PATCH", body: "{}",
   })
 }

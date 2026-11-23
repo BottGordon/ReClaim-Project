@@ -8,8 +8,7 @@ export function phoneInput(value: string) {
 }
 
 export function studentInput(value: string) {
-  const digits = value.replace(/[^0-9]/g, "").slice(0, 9)
-  return digits.length > 4 ? digits.slice(0, 4) + "-" + digits.slice(4) : digits
+  return value.replace(/[^0-9]/g, "").slice(0, 9)
 }
 
 export function PhoneSettings({ phone }: { phone?: string }) {
