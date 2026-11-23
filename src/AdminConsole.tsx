@@ -27,10 +27,10 @@ const field = (data: FormData, name: string) => String(data.get(name) || "")
 const messageFor = (error: unknown) => error instanceof Error ? error.message : "The request could not be completed."
 const matchKey = ({ lostId, foundId }: AdminOverview["matches"][number]) => `${lostId}:${foundId}`
 
-function AdminDialog({ title, children, onClose, hideHeader = false }: { title: string; children: ReactNode; onClose: () => void; hideHeader?: boolean }) {
+function AdminDialog({ title, children, onClose, hideHeader = false, compact = false }: { title: string; children: ReactNode; onClose: () => void; hideHeader?: boolean; compact?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
-  return <dialog ref={dialog} className="admin-dialog admin-drawer" aria-labelledby="admin-dialog-title" onClose={onClose}>
+  return <dialog ref={dialog} className={compact ? "admin-dialog admin-desk-activity" : "admin-dialog admin-drawer"} aria-labelledby="admin-dialog-title" onClose={onClose}>
     {!hideHeader && <header><h2 id="admin-dialog-title">{title}</h2><button type="button" aria-label="Close" onClick={onClose}><X size={20} /></button></header>}
     {children}
   </dialog>
@@ -60,6 +60,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [publishedSamples, setPublishedSamples] = useState<Record<number, Pick<ApiItem, "name" | "description" | "question">>>({})
   const [sampleCustody, setSampleCustody] = useState<Record<number, Pick<ApiItem, "custodyDeskId" | "shelfTag">>>({})
   const [linkedSampleMatches, setLinkedSampleMatches] = useState<Set<string>>(() => new Set())
+  const [readDeskActivity, setReadDeskActivity] = useState<Set<string>>(() => new Set())
   const combined = liveData && combineAdminRecords(liveData)
   const data = preview ?? combined?.data
   const isSampleItem = (id: number) => combined?.itemIds.has(id) === true
@@ -142,7 +143,31 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const inCustody = data?.stats.inCustody ?? items.filter((item) => item.custodyDeskId && item.status !== "Returned").length
   const activeReports = data?.stats.activeReports ?? items.filter((item) => item.status !== "Returned" && item.privacy !== "Held").length
   const notifications = data?.notifications ?? []
-  const unread = notifications.filter((notification) => notification.unread).length
+  const deskActivity = [
+    ...(liveData?.claims ?? []).filter((claim) => claim.status === "Pending").map((claim) => ({
+      key: `claim-${claim.id}`, title: `New Claim on ${ticket(claim.itemId)}`,
+      text: `${claim.claimant} submitted an ownership claim for ${itemById.get(claim.itemId)?.name ?? "this item"}.`,
+      selection: { type: "claim", id: claim.id } as const,
+    })),
+    ...(liveData?.items ?? []).filter((item) => item.privacy === "Held" && item.status !== "Returned").map((item) => ({
+      key: `privacy-${item.id}`, title: `Privacy Redaction Needed · ${ticket(item.id)}`,
+      text: `${item.name} is awaiting privacy review before publication.`,
+      selection: { type: "item", id: item.id } as const,
+    })),
+    ...(liveData?.items ?? []).filter((item) => item.custodyDeskId && item.privacy !== "Held" &&
+      item.status !== "Lost" && item.status !== "Returned" && /\bhigh[ -]value\b/i.test(item.shelfTag ?? "")).map((item) => ({
+      key: `custody-${item.id}`, title: `High-Value Item · ${ticket(item.id)}`,
+      text: `${item.name} is in custody at ${custody(item)}.`,
+      selection: { type: "item", id: item.id } as const,
+    })),
+  ]
+  const unread = notifications.filter((entry) => entry.unread).length +
+    deskActivity.filter((entry) => !readDeskActivity.has(entry.key)).length
+  const samples = [
+    { title: "New Claim on #RCL-108", text: "M. Lomboy submitted ownership verification details.", available: preview || combined?.claimIds.has(108) },
+    { title: "High-Value Item · #RCL-105", text: "A silver laptop is in the OSDS high-value locker.", available: preview || isSampleItem(105) },
+    { title: "Privacy Redaction Needed", text: "Held reports are awaiting privacy review before publication.", available: preview || held.some((item) => isSampleItem(item.id)) },
+  ].filter((entry) => entry.available)
   const selectedClaim = selection?.type === "claim" ? claims.find((claim) => claim.id === selection.id) : undefined
   const proofPhoto = selectedClaim?.proof
   const hasProofPhoto = proofPhoto?.startsWith("data:image/") ||
@@ -297,7 +322,10 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         <div><span className="admin-breadcrumb-muted">ReClaim Admin</span><ChevronRight size={13} /><b>{views.find(([id]) => id === view)?.[1]}</b></div>
         <div className="admin-console-actions">
           {(["dashboard", "inventory", "custody", "claims", "moderation", "matches"] as View[]).includes(view) && <label className="admin-search"><Search size={15} /><input aria-label="Search records" placeholder="Ticket, item, student no., location" value={query} onChange={(event) => setQuery(event.target.value)} /></label>}
-          <button className="admin-icon-action" aria-label={unread + " unread notifications"} onClick={() => inspect({ type: "notifications" })}><Bell size={17} />{unread > 0 && <sup>{unread}</sup>}</button>
+          <button className="admin-icon-action" aria-label={`OSDS Desk Activity, ${unread} unread`} onClick={() => {
+            inspect({ type: "notifications" })
+            if (!preview && !busy) void run()
+          }}><Bell size={17} />{unread > 0 && <sup>{unread}</sup>}</button>
           {!preview && <button className="admin-refresh" disabled={busy} onClick={() => void run()}><RefreshCw size={14} /> Refresh</button>}
           <button className="admin-walkin" disabled={!data || writeDisabled} onClick={() => inspect({ type: "walk-in" })}><Plus size={15} /> Log Walk-in Item</button>
         </div>
@@ -394,16 +422,30 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
         </div>}
       </>}
       {selection && <AdminDialog key={selection.type + ("id" in selection ? selection.id : "")}
-        title={selection.type === "walk-in" ? "Log Walk-in Item" : selection.type === "notifications" ? "Notifications" : selectedClaim ? "Review Ownership Claim" : "Inspect Item"}
+        title={selection.type === "walk-in" ? "Log Walk-in Item" : selection.type === "notifications" ? "OSDS Desk Activity" : selectedClaim ? "Review Ownership Claim" : "Inspect Item"}
+        compact={selection.type === "notifications"}
         hideHeader={Boolean(selectedClaim)}
         onClose={() => { setSelection(undefined); setError("") }}>
         {error && <p className="admin-feedback error" role="alert">{error}</p>}
         {notice && <p className="admin-feedback" role="status">{notice}</p>}
         {selection.type === "notifications" && <div className="admin-record-list">
+          {unread > 0 && <p className="admin-activity-count">{unread} unread</p>}
+          {deskActivity.map((entry) => <article key={entry.key} data-unread={!readDeskActivity.has(entry.key)}>
+            <button type="button" className="admin-activity-entry" onClick={() => {
+              setReadDeskActivity((previous) => new Set(previous).add(entry.key))
+              inspect(entry.selection)
+            }}><b>{entry.title}</b><p>{entry.text}</p></button>
+          </article>)}
           {notifications.map((entry) => <article key={entry.id}><div><b>{entry.title}</b><p>{entry.text}</p></div>
             {entry.unread && <button className="admin-refresh" disabled={writeDisabled} onClick={() => void run(() => setNotificationRead(entry.id, false))}>Mark read</button>}
           </article>)}
-          {!notifications.length && <p>No notifications yet.</p>}
+          {!notifications.length && !deskActivity.length && <>
+            <p>{busy ? "Checking for live desk activity…" : "No live desk activity yet."}</p>
+            {!busy && samples.length > 0 && <>
+              <h3>Sample activity</h3>
+              {samples.map((entry) => <article key={entry.title}><div><b>{entry.title}</b><p>{entry.text}</p></div></article>)}
+            </>}
+          </>}
         </div>}
         {selection.type === "walk-in" && <form className="admin-form" onSubmit={submit((form) => void run(() => adminLogWalkIn({
           name: field(form, "name"), category: field(form, "category"), location: field(form, "location"),
