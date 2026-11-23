@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react"
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { guestReports, messageGuestDesk, submitGuestReport, type ApiUser, type GuestReport } from "./lib/api"
 import { PhoneSettings, phoneInput, phonePattern } from "./PhoneSettings"
+import { useLiveRefresh } from "./lib/useLiveRefresh"
 
 const categories = ["Electronics", "Accessories", "IDs and Cards", "Books and Notes", "Clothing", "Others"]
 
@@ -13,14 +14,17 @@ export function GuestWorkspace({ user, brand, onSignOut }: { user: ApiUser; bran
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
   const [error, setError] = useState("")
+  const requestVersion = useRef(0)
   const report = reports.find((entry) => entry.id === selected)
   const visible = reports.filter((entry) => entry.reference.toLowerCase().includes(query.trim().toLowerCase()))
 
   async function refresh() {
+    const version = ++requestVersion.current
     setLoading(true)
     setError("")
     try {
-      setReports((await guestReports()).reports)
+      const { reports } = await guestReports()
+      if (version === requestVersion.current) setReports(reports)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Could not load your reports.")
     } finally {
@@ -30,8 +34,16 @@ export function GuestWorkspace({ user, brand, onSignOut }: { user: ApiUser; bran
 
   useEffect(() => { void refresh() }, [])
 
+  useLiveRefresh(tab === "track", async (signal) => {
+    if (loading || saving) return
+    const version = requestVersion.current
+    const result = await guestReports(signal)
+    if (!signal.aborted && version === requestVersion.current) setReports(result.reports)
+  })
+
   async function save(event: FormEvent<HTMLFormElement>, reportId?: number) {
     event.preventDefault()
+    requestVersion.current++
     const form = event.currentTarget
     const data = new FormData(form)
     setSaving(true)

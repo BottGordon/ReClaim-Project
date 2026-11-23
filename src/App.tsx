@@ -1,8 +1,9 @@
 import { AdminConsole } from "./AdminConsole"
 import { GuestWorkspace } from "./GuestWorkspace"
 import { PhoneSettings, phoneInput, phonePattern, studentInput } from "./PhoneSettings"
+import { useLiveRefresh } from "./lib/useLiveRefresh"
 import { AccountAvatar } from "./AccountAvatar"
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   ApiClaim,
   ApiConversation,
@@ -1630,16 +1631,18 @@ export default function App() {
     setNotifications(data.notifications)
   }
 
-  async function refreshWorkspace(routeToHome = false) {
+  async function refreshWorkspace(routeToHome = false, signal?: AbortSignal) {
     const generation = accountGeneration.current
     const requestId = ++workspaceRequest.current
-    const data = await bootstrap()
-    if (generation === accountGeneration.current && requestId >= workspaceApplied.current) {
+    const data = await bootstrap(signal)
+    if (!signal?.aborted && generation === accountGeneration.current && requestId >= workspaceApplied.current) {
       workspaceApplied.current = requestId
       applyWorkspace(data, routeToHome)
     }
     return data
   }
+
+  useLiveRefresh(Boolean(currentUser && currentUser.accountType !== "External User" && page !== "admin"), (signal) => refreshWorkspace(false, signal))
 
   useEffect(() => {
     let active = true
@@ -2984,12 +2987,20 @@ function Chat({
   const [sending, setSending] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const relatedDialog = useRef<HTMLDialogElement>(null)
+  const messageList = useRef<HTMLDivElement>(null)
+  const followMessages = useRef(true)
   const [search, setSearch] = useState("")
   const [error, setError] = useState("")
   const conversation =
     conversations.find((entry) => entry.id === selected) || conversations[0]
   const item = items.find((entry) => entry.id === conversation?.itemId)
   const conversationName = conversation?.user
+  const lastMessageId = conversation?.messages.at(-1)?.id
+  const conversationId = conversation?.id
+  useLayoutEffect(() => {
+    const list = messageList.current
+    if (list && followMessages.current) list.scrollTop = list.scrollHeight
+  }, [conversationId, lastMessageId])
   async function send() {
     if ((!message.trim() && !attachment) || !conversation || sending) return
     setError("")
@@ -3047,7 +3058,7 @@ function Chat({
                     }`}
                     onClick={() => {
                       setSelected(entry.id)
-                      if (entry.id !== conversation?.id) { setMessage(""); setAttachment(undefined) }
+                      if (entry.id !== conversation?.id) { setMessage(""); setAttachment(undefined); followMessages.current = true }
                       setConversations((all) =>
                         all.map((item) =>
                           item.id === entry.id ? { ...item, unread: 0 } : item,
@@ -3097,7 +3108,10 @@ function Chat({
               <LockKeyhole size={14} /> Messages are private to claim
               participants
             </div>
-            <div className="messages">
+            <div className="messages" ref={messageList} onScroll={(event) => {
+              const { scrollHeight, scrollTop, clientHeight } = event.currentTarget
+              followMessages.current = scrollHeight - scrollTop - clientHeight <= 48
+            }}>
               <div className="message-date">Today</div>
               {conversation.messages.map((entry) => (
                 <div

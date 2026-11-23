@@ -2,6 +2,7 @@
 import { BarChart3, Bell, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Package, PackageCheck, Plus, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, X } from "lucide-react"
 import { adminDemo, combineAdminRecords } from "./lib/adminDemo"
 import { AccountAvatar } from "./AccountAvatar"
+import { useLiveRefresh } from "./lib/useLiveRefresh"
 import {
   adminLinkMatch, adminLogWalkIn, adminMessageClaimant, adminModerate, adminOverview,
   adminReplyToGuest, adminSetCustody, adminSetDesk, adminUpdateClaim, adminUpdateItemStatus, adminVerifyGuestHandover, setNotificationRead,
@@ -61,6 +62,8 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
   const [sampleCustody, setSampleCustody] = useState<Record<number, Pick<ApiItem, "custodyDeskId" | "shelfTag">>>({})
   const [linkedSampleMatches, setLinkedSampleMatches] = useState<Set<string>>(() => new Set())
   const [readDeskActivity, setReadDeskActivity] = useState<Set<string>>(() => new Set())
+  const actionVersion = useRef(0)
+  const actionInFlight = useRef(false)
   const combined = liveData && combineAdminRecords(liveData)
   const data = preview ?? combined?.data
   const isSampleItem = (id: number) => combined?.itemIds.has(id) === true
@@ -76,8 +79,18 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
     return () => { active = false }
   }, [preview])
 
+  useLiveRefresh(!preview, async (signal) => {
+    if (busy || actionInFlight.current) return
+    const version = actionVersion.current
+    const overview = await adminOverview(signal)
+    if (!signal.aborted && version === actionVersion.current) setLiveData(overview)
+  })
+
   async function run(action?: () => Promise<unknown>, success?: string, close = false) {
     if (action && (preview || selectedIsSample)) return
+    if (actionInFlight.current) return
+    actionInFlight.current = true
+    actionVersion.current++
     setBusy(true)
     setError("")
     setNotice("")
@@ -89,6 +102,7 @@ export function AdminConsole({ user, brand, onSignOut, preview }: AdminConsolePr
     } catch (failure) {
       setError(messageFor(failure))
     } finally {
+      actionInFlight.current = false
       setBusy(false)
     }
   }

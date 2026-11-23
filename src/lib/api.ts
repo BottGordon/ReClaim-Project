@@ -302,22 +302,22 @@ export function verifyPasswordReset(email: string, code: string) {
   })
 }
 
-export async function bootstrap() {
+export async function bootstrap(signal?: AbortSignal) {
   const originalToken = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
   try {
-    return await request<Bootstrap>("/bootstrap")
+    return await request<Bootstrap>("/bootstrap", { signal })
   } catch (failure) {
     if ((failure as ApiError).status !== 401 || !supabase || localStorage.getItem(REMEMBER_KEY) === null) throw failure
     const remember = localStorage.getItem(REMEMBER_KEY) === "true"
     if (!remember && !sessionStorage.getItem(TOKEN_KEY)) throw failure
     const { data } = await supabase.auth.getSession()
-    if (!data.session) throw failure
+    if (!data.session || signal?.aborted) throw failure
     const result = await request<{ token: string }>("/auth/supabase-session", {
-      method: "POST", body: JSON.stringify({ accessToken: data.session.access_token }),
+      method: "POST", body: JSON.stringify({ accessToken: data.session.access_token }), signal,
     })
-    if (originalToken !== (localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY))) throw failure
+    if (signal?.aborted || originalToken !== (localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY))) throw failure
     rememberSession(result.token, remember)
-    return request<Bootstrap>("/bootstrap")
+    return request<Bootstrap>("/bootstrap", { signal })
   }
 }
 
@@ -329,12 +329,12 @@ export function confirmPhoneChange(code: string) {
   return request<{ user: ApiUser }>("/profile/phone/confirm", { method: "POST", body: JSON.stringify({ code }) })
 }
 
-export function adminOverview() {
-  return request<AdminOverview>("/admin/overview")
+export function adminOverview(signal?: AbortSignal) {
+  return request<AdminOverview>("/admin/overview", { signal })
 }
 
-export function guestReports() {
-  return request<{ reports: GuestReport[] }>("/guest/reports")
+export function guestReports(signal?: AbortSignal) {
+  return request<{ reports: GuestReport[] }>("/guest/reports", { signal })
 }
 
 export function submitGuestReport(input: Record<string, string>) {
