@@ -1755,7 +1755,7 @@ export default function App() {
     goTo("browse")
   }
 
-  if (restoringSession) return <p role="status" className="p-6">Checking your session…</p>
+  if (restoringSession) return <p role="status" className="p-6">{waitingForApi ? "ReClaim is reconnecting. This can take a minute." : "Checking your session..."}</p>
   if (sessionError) return <section className="p-6">
     <p className="form-error" role="alert">{sessionError}</p>
     <button className="btn-secondary mt-4" onClick={() => { setSessionError(""); setWaitingForApi(false); setRestoringSession(true); setRestoreAttempt((attempt) => attempt + 1) }}>Retry</button>
