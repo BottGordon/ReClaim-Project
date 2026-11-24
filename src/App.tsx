@@ -847,7 +847,7 @@ function AboutPage({ onNavigate }: { onNavigate: (view: AuthView) => void }) {
             Have questions, concerns, or suggestions about ReClaim? Feel free to
             reach out to us through our email.
           </p>
-          <a href="mailto:reclaim@plm.edu.ph">reclaim@plm.edu.ph</a>
+          <a href="mailto:ReClaimAdmin@gmail.com">ReClaimAdmin@gmail.com</a>
         </section>
       </main>
     </div>
