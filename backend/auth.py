@@ -129,7 +129,10 @@ class Auth:
             if existing is owner or not existing.get(field):
                 continue
             try:
-                other = normalize(existing[field])
+                stored = existing[field]
+                if field == "phone" and isinstance(stored, str):
+                    stored = re.sub(r"^(?:0|63)(?=9[0-9]{9}$)", "", stored)
+                other = normalize(stored)
             except ApiError:
                 continue
             if canonical.lstrip("+") == other.lstrip("+"):
@@ -236,7 +239,14 @@ class Auth:
                 if not user.get(key) and metadata.get(source):
                     if key == "studentNumber" and (not valid_plm_email(email) or metadata.get("account_type") in ("External User", "PLM Staff")):
                         continue
-                    details[key] = self.unique_detail(key, metadata[source], user)
+                    value = metadata[source]
+                    if key == "phone":
+                        try:
+                            value = phone_number(value)
+                        except ApiError:
+                            # Older Auth profiles can have a contact number outside the new format.
+                            continue
+                    details[key] = self.unique_detail(key, value, user)
             if metadata.get("staff_id") and valid_plm_email(email):
                 details["staffId"] = clean(metadata["staff_id"], 40)
             if metadata.get("full_name"):

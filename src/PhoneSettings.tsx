@@ -1,10 +1,20 @@
 import { useState, type FormEvent } from "react"
 import { confirmPhoneChange, requestPhoneChange } from "./lib/api"
 
-export const phonePattern = "\\+?[0-9]{7,15}"
+export const phonePattern = "\\+63 9[0-9]{9}"
+export const phonePlaceholder = "+63 9XXXXXXXXX"
+export const phoneHint = "Enter exactly 10 digits starting with 9, for example 9123456789."
 
 export function phoneInput(value: string) {
-  return (value.startsWith("+") ? "+" : "") + value.replace(/[^0-9]/g, "").slice(0, 15)
+  if (value === "+" || value === "+6" || value === "+63" || value === "+63 ") return ""
+  if (value.startsWith("+") && !value.startsWith("+63")) return value
+  const national = value.startsWith("+63") ? value.slice(3).trimStart() : value
+  return national ? "+63 " + national : ""
+}
+
+export function displayPhone(phone: string) {
+  const match = /^(?:\+?63 ?|0)?(9[0-9]{9})$/.exec(phone)
+  return match ? "+63 " + match[1] : phone
 }
 
 export function studentInput(value: string) {
@@ -45,10 +55,11 @@ export function PhoneSettings({ phone }: { phone?: string }) {
   }
 
   return <form className="settings-fields" onSubmit={(event) => void submit(event)}>
-    <p>Current contact number <b>{current || "Not provided"}</b></p>
+    <p>Current contact number <b>{current ? displayPhone(current) : "Not provided"}</b></p>
     <label className="field-label">New contact number
-      <input className="plain-input w-full" type="tel" pattern={phonePattern} value={next} onChange={(event) => setNext(phoneInput(event.target.value))} readOnly={sent} required />
+      <input className="plain-input w-full" type="tel" pattern={phonePattern} placeholder={phonePlaceholder} title={phoneHint} value={next} onChange={(event) => setNext(phoneInput(event.target.value))} readOnly={sent} required />
     </label>
+    <small className="text-muted">{phoneHint}</small>
     {sent && <label className="field-label">Email verification code
       <input className="plain-input w-full" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} pattern="[0-9]{6}" required />
     </label>}

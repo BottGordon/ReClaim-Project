@@ -68,21 +68,11 @@ def json_truth(value):
 
 
 def phone_number(value):
-    text = clean(value, 40)
-    if not re.fullmatch(r"\+?[0-9 ()-]+", text):
-        raise ApiError(400, "Enter a valid contact number with 7 to 15 digits.")
-    digits = re.sub(r"[^0-9]", "", text)
-    international = text.startswith("+") or digits.startswith("00")
-    if not text.startswith("+") and digits.startswith("00"):
-        digits = digits[2:]
-    if not 7 <= len(digits) <= 15:
-        raise ApiError(400, "Enter a valid contact number with 7 to 15 digits.")
-    if international and digits.startswith("0"):
-        raise ApiError(400, "Enter a valid international contact number.")
-    if not international and re.fullmatch(r"0[2-9][0-9]{8,9}", digits):
-        digits = "63" + digits[1:]
-        international = True
-    return ("+" if international or re.fullmatch(r"63[2-9][0-9]{8,9}", digits) else "") + digits
+    text = value.strip() if isinstance(value, str) else ""
+    match = re.fullmatch(r"(?:\+63 ?)?(9[0-9]{9})", text)
+    if not match:
+        raise ApiError(400, "Enter a Philippine mobile number with exactly 10 digits beginning with 9.")
+    return "+63" + match[1]
 
 
 def student_number(value):
