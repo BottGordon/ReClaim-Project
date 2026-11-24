@@ -92,6 +92,8 @@ type AuthView = "home" | "about" | "login" | "signup" | "forgot" | "verify"
 type DemoUser = {
   id: string
   name: string
+  firstName?: string
+  lastName?: string
   initials: string
   accountType: "PLM Resident" | "PLM Student" | "PLM Staff" | "External User"
   email: string
@@ -1369,7 +1371,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
-  const [details, setDetails] = useState({ name: "", studentNumber: "", phone: "", school: "", password: "", confirm: "" })
+  const [details, setDetails] = useState({ firstName: "", lastName: "", studentNumber: "", phone: "", school: "", password: "", confirm: "" })
   const external = accountKind === "external"
 
   async function sendCode(event: FormEvent) {
@@ -1394,11 +1396,12 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
 
   async function createAccount(event: FormEvent) {
     event.preventDefault(); setError("")
+    if (!details.firstName.trim() || !details.lastName.trim()) { setError("Enter your first and last name."); return }
     if (!meetsPasswordRequirements(details.password)) { setError(passwordRequirement); return }
     if (details.password !== details.confirm) { setError("Passwords do not match."); return }
     setBusy(true)
     try {
-      await register({ ...details, email, accountType: external ? "External User" : "PLM", role, idNumber: details.studentNumber, phone: details.phone })
+      await register({ ...details, firstName: details.firstName.trim(), lastName: details.lastName.trim(), name: [details.firstName.trim(), details.lastName.trim()].join(" "), email, accountType: external ? "External User" : "PLM", role, idNumber: details.studentNumber, phone: details.phone })
       await onDone(email)
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create your account.") }
     finally { setBusy(false) }
@@ -1417,7 +1420,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
     {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Resident / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
     {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM resident account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM resident email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
     {stage === "otp" && <><p className="eyebrow mt-5">Email verification</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Check your inbox.</h1><form className="mt-6 space-y-5" onSubmit={checkCode}><p className="auth-copy">Enter the six-digit code sent to <b>{email}</b>.</p><label className="field-label" htmlFor="signup-otp">One-time password</label><input className="plain-input w-full text-center tracking-[0.35em]" id="signup-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy || code.length !== 6}>{busy ? "Verifying…" : "Verify email"}<ChevronRight size={16} /></button><button type="button" className="text-button" disabled={busy} onClick={async () => { setError(""); try { await resendVerification(email); setCode("") } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not resend code.") } }}>Resend code</button></form></>}
-    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<label className="field-label" htmlFor="signup-name">Full name</label><input className="plain-input w-full" id="signup-name" required value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} />{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required placeholder={role === "student" ? "202411649" : "Staff ID"} inputMode={role === "student" ? "numeric" : undefined} pattern={role === "student" ? "[0-9]{9}" : undefined} value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: role === "student" ? studentInput(event.target.value) : event.target.value })} /></>}<label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} placeholder={phonePlaceholder} title={phoneHint} aria-describedby="signup-phone-hint" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /><small id="signup-phone-hint" className="block text-xs text-muted">{phoneHint}</small><label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" aria-describedby="signup-password-requirements" autoComplete="new-password" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><PasswordRequirements /><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><SignupPolicy />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
+    {stage === "details" && <><p className="eyebrow mt-5">{external ? "External account" : "PLM resident account"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Complete your account.</h1><form className="mt-6 space-y-4" onSubmit={createAccount}><p className="auth-copy">Verified email: <b>{email}</b></p>{!external && <div className="segmented"><button type="button" className={role === "student" ? "active" : ""} onClick={() => setRole("student")}>Student</button><button type="button" className={role === "staff" ? "active" : ""} onClick={() => setRole("staff")}>Staff</button></div>}<div className="grid grid-cols-2 gap-3"><label className="field-label">First name<input className="plain-input w-full" autoComplete="given-name" maxLength={49} required value={details.firstName} onChange={(event) => setDetails({ ...details, firstName: event.target.value })} /></label><label className="field-label">Last name<input className="plain-input w-full" autoComplete="family-name" maxLength={50} required value={details.lastName} onChange={(event) => setDetails({ ...details, lastName: event.target.value })} /></label></div>{external ? <><label className="field-label" htmlFor="signup-school">School / University (optional)</label><input className="plain-input w-full" id="signup-school" value={details.school} onChange={(event) => setDetails({ ...details, school: event.target.value })} /></> : <><label className="field-label" htmlFor="signup-id">{role === "student" ? "Student number" : "Staff ID"}</label><input className="plain-input w-full" id="signup-id" required placeholder={role === "student" ? "202411649" : "Staff ID"} inputMode={role === "student" ? "numeric" : undefined} pattern={role === "student" ? "[0-9]{9}" : undefined} value={details.studentNumber} onChange={(event) => setDetails({ ...details, studentNumber: role === "student" ? studentInput(event.target.value) : event.target.value })} /></>}<label className="field-label" htmlFor="signup-phone">Contact number</label><input className="plain-input w-full" id="signup-phone" type="tel" pattern={phonePattern} placeholder={phonePlaceholder} title={phoneHint} aria-describedby="signup-phone-hint" required value={details.phone} onChange={(event) => setDetails({ ...details, phone: phoneInput(event.target.value) })} /><small id="signup-phone-hint" className="block text-xs text-muted">{phoneHint}</small><label className="field-label" htmlFor="signup-password">Password</label><div className="field-wrap"><input id="signup-password" className="w-full" aria-describedby="signup-password-requirements" autoComplete="new-password" type={showPassword ? "text" : "password"} required value={details.password} onChange={(event) => setDetails({ ...details, password: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><PasswordRequirements /><label className="field-label" htmlFor="signup-confirm">Confirm password</label><div className="field-wrap"><input id="signup-confirm" className="w-full" type={showPassword ? "text" : "password"} required value={details.confirm} onChange={(event) => setDetails({ ...details, confirm: event.target.value })} /><button type="button" className="field-action" onClick={() => setShowPassword(!showPassword)} aria-label="Toggle password visibility">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><SignupPolicy />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Creating account…" : "Create account"}<ChevronRight size={16} /></button></form></>}
   </div></main></div>
 }
 function AuthDecor() {
@@ -2013,6 +2016,10 @@ export default function App() {
               notify={notify}
               onLogout={signOut}
               onSave={updateProfilePhoto}
+              onConfirmName={async (firstName, lastName) => {
+                await saveProfile({ firstName, lastName })
+                await refreshWorkspace()
+              }}
               reportCount={items.filter((item) => item.ownerId === currentUser.id).length}
               returnCount={items.filter((item) => item.ownerId === currentUser.id && item.status === "Returned").length}
             />
@@ -3329,6 +3336,7 @@ function Profile({
   notify,
   onLogout,
   onSave,
+  onConfirmName,
   reportCount,
   returnCount,
 }: {
@@ -3336,6 +3344,7 @@ function Profile({
   notify: (message: string) => void
   onLogout: () => void | Promise<void>
   onSave: (photo: string) => Promise<void>
+  onConfirmName: (firstName: string, lastName: string) => Promise<void>
   reportCount: number
   returnCount: number
 }) {
@@ -3409,16 +3418,8 @@ function Profile({
           </button>
         </aside>
         <section className="settings-card">
-          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : `${displayAccountType(user.accountType)} account details`}</h3><p>These verified details can't be edited here.</p></div></div>
-          <div className="settings-fields">
-            <ProfileField label="Full name" value={user.name} />
-            <ProfileField label={user.accountType === "External User" ? "Account email" : "Official PLM resident email"} value={user.email} />
-            {user.accountType === "External User" ? (
-              <ProfileField label="School / University" value={user.school || "Not provided"} />
-            ) : (
-              <ProfileField label={user.staffId ? "Staff ID" : "Student number"} value={user.staffId || user.studentNumber || "Not provided"} />
-            )}
-          </div>
+          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : `${displayAccountType(user.accountType)} account details`}</h3><p>Review your account details.</p></div></div>
+          <ProfileIdentity user={user} onConfirmName={onConfirmName} />
           <div className="settings-divider" />
           <PhoneSettings phone={user.phone} />
           <div className="settings-divider" />
@@ -3468,6 +3469,48 @@ function Profile({
   )
 }
 
+function ProfileIdentity({ user, onConfirmName }: {
+  user: DemoUser
+  onConfirmName: (firstName: string, lastName: string) => Promise<void>
+}) {
+  const words = user.name.trim().split(/\s+/)
+  const [firstName, setFirstName] = useState(words.length > 1 ? words.slice(0, -1).join(" ") : user.name)
+  const [lastName, setLastName] = useState(words.length > 1 ? words.at(-1)! : "")
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState("")
+  const needsConfirmation = (!user.firstName || !user.lastName) && words.length > 1
+  const external = user.accountType === "External User"
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSaving(true)
+    setError("")
+    try {
+      await onConfirmName(firstName.trim(), lastName.trim())
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not confirm your name.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <form onSubmit={submit}>
+    <div className="settings-fields !grid-cols-2">
+      <ProfileField label="First name" value={user.firstName || firstName} editable={needsConfirmation} onChange={setFirstName} />
+      <ProfileField label="Last name" value={user.lastName || lastName} editable={needsConfirmation} onChange={setLastName} />
+      {external
+        ? <ProfileField label="School / University" value={user.school || "Not provided"} />
+        : <ProfileField label={user.accountType === "PLM Staff" ? "Staff ID" : "Student ID"} value={(user.accountType === "PLM Staff" ? user.staffId : user.studentNumber) || "Not provided"} />}
+      <ProfileField label={external ? "Account email" : "Official PLM email"} value={user.email} />
+    </div>
+    {needsConfirmation && <div className="mt-4 space-y-2">
+      <p className="text-sm text-muted">Confirm how your existing full name should be split.</p>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <button className="btn-tertiary" disabled={saving || !firstName.trim() || !lastName.trim()}>{saving ? "Saving..." : "Confirm name"}</button>
+    </div>}
+  </form>
+}
+
 function ProfileField({
   label,
   value,
@@ -3487,7 +3530,7 @@ function ProfileField({
         {label}
         {!editable && <LockKeyhole size={11} />}
       </label>
-        <input value={value} placeholder={placeholder} disabled={!editable} onChange={(event) => onChange?.(event.target.value)} />
+        <input aria-label={label} value={value} placeholder={placeholder} disabled={!editable} onChange={(event) => onChange?.(event.target.value)} />
     </div>
   )
 }

@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from admin import Admin
 from auth import Auth, is_external, public_user
-from common import ApiError, MAX_BODY_BYTES, valid_upload
+from common import ApiError, MAX_BODY_BYTES, required, valid_upload
 from guest import GuestReports
 from records import Records
 from storage import Store, load_environment
@@ -155,6 +155,15 @@ class Service:
             photo = data["photo"]
             if photo != "" and not valid_upload(photo, ("image/png", "image/jpeg", "image/webp")):
                 raise ApiError(400, "Upload a PNG, JPEG, or WebP profile photo up to 5 MB.")
+        if "firstName" in data or "lastName" in data:
+            if user.get("firstName") and user.get("lastName"):
+                raise ApiError(409, "Your name has already been confirmed.")
+            first = required(data.get("firstName"), "First name", 100)
+            last = required(data.get("lastName"), "Last name", 100)
+            if " ".join((first + " " + last).split()) != " ".join(user["name"].split()):
+                raise ApiError(400, "First and last name must match the full name on your account.")
+            user.update(firstName=first, lastName=last)
+        if "photo" in data:
             user["photo"] = photo
         self.records.store.save()
         return 200, {"user": public_user(user)}

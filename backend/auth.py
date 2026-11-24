@@ -251,6 +251,9 @@ class Auth:
                 details["staffId"] = clean(metadata["staff_id"], 40)
             if metadata.get("full_name"):
                 details["name"] = clean(metadata["full_name"], 100)
+            if clean(metadata.get("first_name"), 100) and clean(metadata.get("last_name"), 100):
+                details["firstName"] = clean(metadata["first_name"], 100)
+                details["lastName"] = clean(metadata["last_name"], 100)
             user.update(details)
             if not valid_plm_email(email) or metadata.get("account_type") == "External User":
                 user["accountType"] = "External User"

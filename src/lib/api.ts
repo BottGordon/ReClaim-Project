@@ -8,6 +8,8 @@ const API_BASE = import.meta.env.VITE_API_BASE || ""
 export type ApiUser = {
   id: string
   name: string
+  firstName?: string
+  lastName?: string
   initials?: string
   accountType: "PLM Resident" | "PLM Student" | "PLM Staff" | "External User"
   email: string
@@ -230,6 +232,8 @@ export async function register(input: Record<string, string>) {
     password: input.password,
     data: {
       full_name: input.name,
+      first_name: input.firstName,
+      last_name: input.lastName,
       student_number: accountType === "PLM Resident" ? details.idNumber : null,
       staff_id: accountType === "PLM Staff" ? details.idNumber : null,
       phone: details.phone,
@@ -551,7 +555,7 @@ export async function setNotificationRead(id: string, unread: boolean) {
   })
 }
 
-export async function saveProfile(input: { photo: string }) {
+export async function saveProfile(input: { photo: string } | { firstName: string; lastName: string }) {
   return (await request<{ user: ApiUser }>("/profile", { method: "PATCH", body: JSON.stringify(input) })).user
 }
 
