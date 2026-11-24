@@ -107,12 +107,12 @@ type DemoUser = {
 }
 
 function displayAccountType(accountType: string) {
-  if (accountType === "PLM" || accountType === "PLM Student" || accountType === "PLM Resident") return "PLM Resident"
+  if (accountType === "PLM" || accountType === "PLM Resident") return "PLM Student"
   return accountType
 }
 
 function verifiedAccountLabel(accountType: string) {
-  if (accountType === "PLM" || accountType === "PLM Student" || accountType === "PLM Resident") return "Verified PLM Resident"
+  if (displayAccountType(accountType) === "PLM Student") return "Verified PLM Student"
   if (accountType === "PLM Staff") return "Verified PLM Staff"
   return `Verified ${accountType}`
 }
@@ -3361,7 +3361,7 @@ function Profile({
           </button>
         </aside>
         <section className="settings-card">
-          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : "PLM resident account details"}</h3><p>These verified details can't be edited here.</p></div></div>
+          <div className="settings-head"><div><h3>{user.accountType === "External User" ? "External account details" : `${displayAccountType(user.accountType)} account details`}</h3><p>These verified details can't be edited here.</p></div></div>
           <div className="settings-fields">
             <ProfileField label="Full name" value={user.name} />
             <ProfileField label={user.accountType === "External User" ? "Account email" : "Official PLM resident email"} value={user.email} />
