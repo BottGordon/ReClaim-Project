@@ -943,7 +943,11 @@ function Auth({ onLogin }: { onLogin: () => Promise<void> }) {
     finally { setBusy(false) }
   }
 
-  if (view === "signup") return <SignupFlow onDone={(email) => {
+  if (view === "signup") return <SignupFlow onNavigate={(nextView) => {
+    setError("")
+    setSuccessMessage("")
+    setView(nextView)
+  }} onDone={(email) => {
     setError("")
     setShowPassword(false)
     setSuccessMessage(email ? "Account created. Sign in with your email and password." : "")
@@ -1362,7 +1366,10 @@ function PasswordRequirements() {
   </ul>
 }
 
-function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void> }) {
+function SignupFlow({ onDone, onNavigate }: {
+  onDone: (email: string) => void | Promise<void>
+  onNavigate: (view: AuthView) => void
+}) {
   const [stage, setStage] = useState<"choose" | "email" | "otp" | "details">("choose")
   const [accountKind, setAccountKind] = useState<"plm" | "external">("plm")
   const [email, setEmail] = useState("")
@@ -1415,7 +1422,7 @@ function SignupFlow({ onDone }: { onDone: (email: string) => void | Promise<void
     else setStage("otp")
   }
 
-  return <div className="auth-page"><PublicNav view="signup" onNavigate={() => {}} /><main className="auth-stage"><AuthDecor /><div className="auth-card auth-card-surface max-w-[600px]">
+  return <div className="auth-page"><PublicNav view="signup" onNavigate={onNavigate} /><main className="auth-stage"><AuthDecor /><div className="auth-card auth-card-surface max-w-[600px]">
     <button className="back-link" onClick={goBack}><ChevronLeft size={16} /> Back</button>
     {stage === "choose" && <><p className="eyebrow mt-5">Create your account</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Join the recovery network.</h1><div className="mt-6 grid gap-4 sm:grid-cols-2"><AccountCard icon={<IdCard />} title="PLM Resident / Staff" text="Use your verified university credentials." onClick={() => { setAccountKind("plm"); setStage("email") }} /><AccountCard icon={<UserRound />} title="External User" text="For visitors and members of other schools." onClick={() => { setAccountKind("external"); setStage("email") }} /></div></>}
     {stage === "email" && <><p className="eyebrow mt-5">{external ? "External account registration" : "PLM resident account registration"}</p><h1 className="font-display text-3xl font-bold text-navy mt-2">Verify your email first.</h1><form className="mt-6 space-y-5" onSubmit={sendCode}><p className="auth-copy">We'll send a one-time code to your {external ? "email inbox" : "PLM Outlook inbox"}.</p><label className="field-label" htmlFor="signup-email">{external ? "Email address" : "Official PLM resident email"}</label><input className="plain-input w-full" id="signup-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder={external ? "you@example.com" : "name@plm.edu.ph"} />{error && <div className="form-error">{error}</div>}<button className="btn-primary w-full" disabled={busy}>{busy ? "Sending code…" : "Send OTP"}<ChevronRight size={16} /></button></form></>}
